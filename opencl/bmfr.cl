@@ -24,68 +24,78 @@
 
 #define static
 
-// Unrolled parallel reduction. Works only with 256 inputs
-static inline void parallel_reduction_sum(
-      __local float *result,
-      __local float *sum_vec,
-      const int start_index) {
-
-   const int id = get_local_id(0);
-   if(id < 64)
-      sum_vec[id] += sum_vec[id+ 64] + sum_vec[id + 128] + sum_vec[id + 192];
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id < 8)
-      sum_vec[id] += sum_vec[id + 8] + sum_vec[id + 16] + sum_vec[id + 24] +
-         sum_vec[id + 32] + sum_vec[id + 40] + sum_vec[id + 48] + sum_vec[id + 56];
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id == 0){
-      *result = sum_vec[0] + sum_vec[1] + sum_vec[2] + sum_vec[3] +
-         sum_vec[4] + sum_vec[5] + sum_vec[6] + sum_vec[7];
-   }
-   barrier(CLK_LOCAL_MEM_FENCE);
+inline void SyncThreads()
+{
+	barrier(CLK_LOCAL_MEM_FENCE); // Equivalent to CUDA __syncthreads() (https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/barrier.html)
 }
 
-static inline void parallel_reduction_min(
-      __local float *result,
-      __local float *sum_vec) {
+// Unrolled parallel sum reduction of 256 values
+// TODO: unused start_index...
+static inline void parallel_reduction_sum_256(__local float * result, __local float * pr_data_256, const int start_index)
+{
+	const int id = get_local_id(0); // = threadIdx.x
 
-   const int id = get_local_id(0);
-   if(id < 64)
-      sum_vec[id] = fmin(fmin(fmin(sum_vec[id], sum_vec[id+ 64]),
-         sum_vec[id + 128]), sum_vec[id + 192]);
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id < 8)
-      sum_vec[id] = fmin(fmin(fmin(fmin(fmin(fmin(fmin(sum_vec[id], sum_vec[id + 8]),
-         sum_vec[id + 16]), sum_vec[id + 24]), sum_vec[id + 32]), sum_vec[id + 40]),
-         sum_vec[id + 48]), sum_vec[id + 56]);
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id == 0){
-      *result = fmin(fmin(fmin(fmin(fmin(fmin(fmin(sum_vec[0], sum_vec[1]), sum_vec[2]),
-         sum_vec[3]), sum_vec[4]), sum_vec[5]), sum_vec[6]), sum_vec[7]);
-   }
-   barrier(CLK_LOCAL_MEM_FENCE);
+	if(id < 64)
+		pr_data_256[id] += pr_data_256[id + 64] + pr_data_256[id + 128] + pr_data_256[id + 192];
+	SyncThreads();
 
+	if(id < 8)
+		pr_data_256[id] += pr_data_256[id + 8]  + pr_data_256[id + 16] + pr_data_256[id + 24] +
+						   pr_data_256[id + 32] + pr_data_256[id + 40] + pr_data_256[id + 48] + pr_data_256[id + 56];
+	SyncThreads();
+
+	if(id == 0)
+	{
+		*result = pr_data_256[0] + pr_data_256[1] + pr_data_256[2] + pr_data_256[3] +
+				  pr_data_256[4] + pr_data_256[5] + pr_data_256[6] + pr_data_256[7];
+	}
+	SyncThreads();
 }
 
-static inline void parallel_reduction_max(
-      __local float *result,
-      __local float *sum_vec) {
+// Unrolled parallel min reduction of 256 values
+static inline void parallel_reduction_min_256(__local float * result, __local float * pr_data_256)
+{
+	const int id = get_local_id(0); // = threadIdx.x
 
-   const int id = get_local_id(0);
-   if(id < 64)
-      sum_vec[id] = fmax(fmax(fmax(sum_vec[id], sum_vec[id+ 64]),
-         sum_vec[id + 128]), sum_vec[id + 192]);
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id < 8)
-      sum_vec[id] = fmax(fmax(fmax(fmax(fmax(fmax(fmax(sum_vec[id], sum_vec[id + 8]),
-         sum_vec[id + 16]), sum_vec[id + 24]), sum_vec[id + 32]), sum_vec[id + 40]),
-         sum_vec[id + 48]), sum_vec[id + 56]);
-   barrier(CLK_LOCAL_MEM_FENCE);
-   if(id == 0){
-      *result = fmax(fmax(fmax(fmax(fmax(fmax(fmax(sum_vec[0], sum_vec[1]), sum_vec[2]),
-         sum_vec[3]), sum_vec[4]), sum_vec[5]), sum_vec[6]), sum_vec[7]);
-   }
-   barrier(CLK_LOCAL_MEM_FENCE);
+	if(id < 64)
+		pr_data_256[id] = fmin(fmin(fmin(pr_data_256[id], pr_data_256[id + 64]), pr_data_256[id + 128]), pr_data_256[id + 192]);
+	SyncThreads();
+
+	if(id < 8)
+		pr_data_256[id] = fmin(fmin(fmin(fmin(fmin(fmin(fmin(pr_data_256[id], pr_data_256[id + 8]),
+			pr_data_256[id + 16]), pr_data_256[id + 24]), pr_data_256[id + 32]), pr_data_256[id + 40]),
+			pr_data_256[id + 48]), pr_data_256[id + 56]);
+	SyncThreads();
+
+	if(id == 0)
+	{
+		*result = fmin(fmin(fmin(fmin(fmin(fmin(fmin(pr_data_256[0], pr_data_256[1]), pr_data_256[2]),
+			pr_data_256[3]), pr_data_256[4]), pr_data_256[5]), pr_data_256[6]), pr_data_256[7]);
+	}
+	SyncThreads();
+}
+
+// Unrolled parallel max reduction of 256 values
+static inline void parallel_reduction_max_256(__local float * result, __local float * pr_data_256)
+{
+   const int id = get_local_id(0); // = threadIdx.x
+
+	if(id < 64)
+		pr_data_256[id] = fmax(fmax(fmax(pr_data_256[id], pr_data_256[id + 64]), pr_data_256[id + 128]), pr_data_256[id + 192]);
+	SyncThreads();
+
+	if(id < 8)
+		pr_data_256[id] = fmax(fmax(fmax(fmax(fmax(fmax(fmax(pr_data_256[id], pr_data_256[id + 8]),
+			pr_data_256[id + 16]), pr_data_256[id + 24]), pr_data_256[id + 32]), pr_data_256[id + 40]),
+			pr_data_256[id + 48]), pr_data_256[id + 56]);
+	SyncThreads();
+
+	if(id == 0)
+	{
+		*result = fmax(fmax(fmax(fmax(fmax(fmax(fmax(pr_data_256[0], pr_data_256[1]), pr_data_256[2]),
+			pr_data_256[3]), pr_data_256[4]), pr_data_256[5]), pr_data_256[6]), pr_data_256[7]);
+	}
+	SyncThreads();
 }
 
 // Helper defines used in IN_ACCESS define
@@ -194,11 +204,18 @@ float3 YCoCg_to_RGB(float3 YCoCg)
 
 static inline float scale(float value, float min, float max)
 {
-   if(fabs(max - min) > 1.0f)
-   {
-      return (value - min) / (max - min);
-   }
-   return value - min;
+	if(fabs(max - min) > 1.0f)
+	{
+		return (value - min) / (max - min);
+	}
+	return value - min;
+}
+
+// Alternative scale method
+static inline float Scale01(float value, float min, float max)
+{
+	const float span = max - min;
+	return (span > 0.0f) ? (value - min) / span : 0.0f;
 }
 
 // Simple mirroring of image index if it is out of bounds.
@@ -552,15 +569,21 @@ __kernel void accumulate_noisy_data(
 	}
 }
 
+// TODO: add an extra pass to normalize features and copy them to a single buffer
+// -> normalize world_position only once and then compute world_position*world_position
+// --> avoid parallel reduction for higher order features
+// --> avoid output min/max that is used to scale the scaled features in the kernel "weighted_sum"
+//	   (there seems to be double scaling: once in fitter and once weighted_sum...)
+
 #if ADD_REQD_WG_SIZE
 __attribute__((reqd_work_group_size(256, 1, 1)))
 #endif
 __kernel void fitter(
-	__local float *sum_vec,
+	__local float *pr_data_256,						// [local] Shared memory used to perform parrallel reduction (max, min, sum)
 	__local float *u_vec,
 	__local float3 *r_mat,
 	__global float* restrict weights,
-	__global float* restrict mins_maxs,
+	__global float* restrict mins_maxs,				// [out]   Min and max of features values per block
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	__global half* restrict tmp_data,
 	#else
@@ -569,45 +592,72 @@ __kernel void fitter(
 	const int frame_number
 )
 {
-   __local float u_length_squared, dot, block_min, block_max, vec_length;
-   float prod = 0.0f;
+	__local float u_length_squared;
+	__local float dot;
+	__local float block_min; // Local variable that will hold the result of the parallel min reduction
+	__local float block_max; // Local variable that will hold the result of the parallel max reduction
+	__local float vec_length;
+	float prod = 0.0f;
 
-   const int group_id = get_group_id(0);
-   const int id = get_local_id(0);
-   const int buffers = BUFFER_COUNT;
+	const int group_id = get_group_id(0); // = blockIdx.x
+	const int id = get_local_id(0); // = threadIdx.x in [0, 255]
+	const int buffers = BUFFER_COUNT;
 
-   // Scales world positions to 0..1 in a block
-   for(int feature_buffer = FEATURES_NOT_SCALED; feature_buffer < buffers - 3; ++feature_buffer)
-   {
-      // Find maximum and minimum of the whole block
-      float tmp_max = -INFINITY;
-      float tmp_min = INFINITY;
-      for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector){
-         float value = LOAD(tmp_data, IN_ACCESS);
-         tmp_max = fmax(value, tmp_max);
-         tmp_min = fmin(value, tmp_min);
-      }
-      sum_vec[id] = tmp_max;
-      barrier(CLK_LOCAL_MEM_FENCE);
+	// Scales world positions to 0..1 in a block
+	const int feature_to_scale_beg_idx = FEATURES_NOT_SCALED;
+	const int feature_to_scale_end_idx = buffers - 3;
+	for(int feature_buffer = feature_to_scale_beg_idx; feature_buffer < feature_to_scale_end_idx; ++feature_buffer)
+	{
+		// Find maximum and minimum of the whole block
+		float tmp_max = -INFINITY;
+		float tmp_min = +INFINITY;
+	  
+		// LOCAL_SIZE = size of the shared memory (= 256)
+		// BLOCK_PIXELS = number of pixels in a block (32x32 = 1024)
 
-      parallel_reduction_max(&block_max, sum_vec);
+		// #define HORIZONTAL_BLOCKS (WORKSET_WIDTH / BLOCK_EDGE_LENGTH)
+		// #define BLOCK_INDEX_X (group_id % (HORIZONTAL_BLOCKS + 1))
+		// #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
+		// #define IN_BLOCK_INDEX (BLOCK_INDEX_Y * (HORIZONTAL_BLOCKS + 1) + BLOCK_INDEX_X)
+		// #define FEATURE_START (feature_buffer * BLOCK_PIXELS)
+		// #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * 256 + id)
 
-      sum_vec[id] = tmp_min;
-      barrier(CLK_LOCAL_MEM_FENCE);
+		// Manual unrolling for parallel reduction as the block contains 1024 (32x32) work items and
+		// the reduction operates on 256 elements (group size)
+		// -> Compute the min and max of N values (N = 1024/256 = 4)
+		const int N = BLOCK_PIXELS / LOCAL_SIZE;
+		for(int sub_vector = 0; sub_vector < N; ++sub_vector)
+		{
+			float value = LOAD(tmp_data, IN_ACCESS);
+			tmp_max = fmax(value, tmp_max);
+			tmp_min = fmin(value, tmp_min);
+		}
 
-      parallel_reduction_min(&block_min, sum_vec);
+		// Parallel min reduction
+		pr_data_256[id] = tmp_min;
+		SyncThreads();
+		parallel_reduction_min_256(&block_min, pr_data_256);
 
-      if(id == 0){
-         const int index = (group_id * FEATURES_SCALED + feature_buffer - FEATURES_NOT_SCALED) * 2;
-         mins_maxs[index + 0] = block_min;
-         mins_maxs[index + 1] = block_max;
-      }
-      barrier(CLK_LOCAL_MEM_FENCE);
+		// Parallel max reduction
+		pr_data_256[id] = tmp_max;
+		SyncThreads();
+		parallel_reduction_max_256(&block_max, pr_data_256);
 
-      for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector){
-         float scaled_value = scale(LOAD(tmp_data, IN_ACCESS), block_min, block_max);
-         STORE(tmp_data, IN_ACCESS, scaled_value);
-      }
+		// Output the min and max features values per block of 32x32 pixels (only output 256 values because of manual unrolling of 4)
+		if(id == 0)
+		{
+			const int index = (group_id * FEATURES_SCALED + (feature_buffer - feature_to_scale_beg_idx)) * 2;
+			mins_maxs[index + 0] = block_min;
+			mins_maxs[index + 1] = block_max;
+		}
+		SyncThreads();
+
+		// Scale feature and replace value in features buffer
+		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
+		{
+			float scaled_value = scale(LOAD(tmp_data, IN_ACCESS), block_min, block_max);
+			STORE(tmp_data, IN_ACCESS, scaled_value);
+		}
    }
 
    // Non square matrices require processing every column. Otherwise result is
@@ -633,9 +683,9 @@ __kernel void fitter(
       barrier(CLK_LOCAL_MEM_FENCE);
 
       // Find length of vector in A's column with reduction sum function
-      sum_vec[id] = tmp_sum_value;
+      pr_data_256[id] = tmp_sum_value;
       barrier(CLK_LOCAL_MEM_FENCE);
-      parallel_reduction_sum(&vec_length, sum_vec, col_limited + 1);
+      parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
 
       // NOTE: GCN Opencl compiler can do some optimization with this because if
       // initially wanted col_limited is used to select wich WI runs which branch
@@ -702,9 +752,9 @@ __kernel void fitter(
             }
          }
 
-         sum_vec[id] = tmp_sum_value;
+         pr_data_256[id] = tmp_sum_value;
          barrier(CLK_LOCAL_MEM_FENCE);
-         parallel_reduction_sum(&dot, sum_vec, col_limited);
+         parallel_reduction_sum_256(&dot, pr_data_256, col_limited);
 
          for (int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector) {
              const int index = id + sub_vector * LOCAL_SIZE;
@@ -805,8 +855,7 @@ __kernel void weighted_sum(
       // Scale world position buffers
       if (feature_buffer >= FEATURES_NOT_SCALED) {
          const int min_max_index = (group_index * FEATURES_SCALED + feature_buffer - FEATURES_NOT_SCALED) * 2;
-         feature =
-            scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
+         feature = scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
       }
 
       // Load weight and sum

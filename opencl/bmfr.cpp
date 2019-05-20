@@ -113,10 +113,19 @@
 #define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
 #define OUTPUT_SIZE (WORKSET_WIDTH * WORKSET_HEIGHT)
 // 256 is the maximum local size on AMD GCN
-// Synchronization within 32x32=1024 block requires unrollign four times
+// Synchronization within 32x32=1024 block requires unrolling four times
 #define LOCAL_SIZE 256
-#define FITTER_GLOBAL (LOCAL_SIZE * ((WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) * \
-   (WORKSET_WITH_MARGINS_HEIGHT / BLOCK_EDGE_LENGTH)))
+
+// Number of blocks in X dim in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT_X (WORKSET_WITH_MARGINS_WIDTH  / BLOCK_EDGE_LENGTH)
+
+// Number of blocks in Y dim in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT_Y (WORKSET_WITH_MARGINS_HEIGHT / BLOCK_EDGE_LENGTH)
+
+// Number of block in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
+
+#define FITTER_GLOBAL (LOCAL_SIZE * WORKSET_WITH_MARGIN_BLOCK_COUNT)
 
 // Creates two same buffers and swap() call can be used to change which one is considered
 // current and which one previous
@@ -143,15 +152,11 @@ struct Operation_result
         success(success), error_message(error_message) {}
 };
 
-Operation_result read_image_file(
-    const std::string &file_name, const int frame, float *buffer)
+Operation_result read_image_file(const std::string &file_name, const int frame, float *buffer)
 {
-    OpenImageIO::ImageInput *in = OpenImageIO::ImageInput::open(
-        file_name + std::to_string(frame) + ".exr");
-    if (!in || in->spec().width != IMAGE_WIDTH ||
-        in->spec().height != IMAGE_HEIGHT || in->spec().nchannels != 3)
+    OpenImageIO::ImageInput *in = OpenImageIO::ImageInput::open(file_name + std::to_string(frame) + ".exr");
+    if(!in || in->spec().width != IMAGE_WIDTH || in->spec().height != IMAGE_HEIGHT || in->spec().nchannels != 3)
     {
-
         return {false, "Can't open image file or it has wrong type: " + file_name};
     }
 
@@ -166,7 +171,7 @@ Operation_result read_image_file(
 Operation_result load_image(cl_float *image, const std::string file_name, const int frame)
 {
     Operation_result result = read_image_file(file_name, frame, image);
-    if (!result.success)
+    if(!result.success)
         return result;
 
     return {true};
@@ -232,7 +237,11 @@ int tasks()
 	// 3.2 Preprocessing: temporal accumulation of the noisy 1 spp data, which reprojects the previous accumulated data to the new camera frame
     cl::Kernel &accum_noisy_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_noisy_data", build_options.str().c_str()));
 
+	// Phase II: feature fitting phase
+	// 3.3 Blockwise Multi-Order Feature Regression (BMFR)
+	// 3.4 Feature Fitting with Stochastic Regularization
     cl::Kernel &fitter_kernel(clEnv.addProgram(0, "bmfr.cl", "fitter", build_options.str().c_str()));
+
     cl::Kernel &weighted_sum_kernel(clEnv.addProgram(0, "bmfr.cl", "weighted_sum", build_options.str().c_str()));
     cl::Kernel &accum_filtered_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_filtered_data", build_options.str().c_str()));
     cl::Kernel &taa_kernel(clEnv.addProgram(0, "bmfr.cl", "taa", build_options.str().c_str()));
@@ -252,9 +261,9 @@ int tasks()
     std::vector<cl_float> noisy_input[FRAME_COUNT];
     bool error = false;
 	#pragma omp parallel for
-    for (int frame = 0; frame < FRAME_COUNT; ++frame)
+    for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
-        if (error)
+        if(error)
             continue;
 
         out_data[frame].resize(3 * OUTPUT_SIZE);
@@ -262,7 +271,7 @@ int tasks()
         albedos[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
         Operation_result result = load_image(albedos[frame].data(), ALBEDO_FILE_NAME,
             frame);
-        if (!result.success)
+        if(!result.success)
         {
             error = true;
             printf("Albedo buffer loading failed, reason: %s\n",
@@ -272,7 +281,7 @@ int tasks()
 
         normals[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
         result = load_image(normals[frame].data(), NORMAL_FILE_NAME, frame);
-        if (!result.success)
+        if(!result.success)
         {
             error = true;
             printf("Normal buffer loading failed, reason: %s\n",
@@ -282,7 +291,7 @@ int tasks()
 
         positions[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
         result = load_image(positions[frame].data(), POSITION_FILE_NAME, frame);
-        if (!result.success)
+        if(!result.success)
         {
             error = true;
             printf("Position buffer loading failed, reason: %s\n",
@@ -292,7 +301,7 @@ int tasks()
 
         noisy_input[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
         result = load_image(noisy_input[frame].data(), NOISY_FILE_NAME, frame);
-        if (!result.success)
+        if(!result.success)
         {
             error = true;
             printf("Position buffer loading failed, reason: %s\n",
@@ -301,7 +310,7 @@ int tasks()
         }
     }
 
-    if (error)
+    if(error)
     {
         printf("One or more errors occurred during buffer loading\n");
         return 1;
@@ -345,11 +354,13 @@ int tasks()
     const int r_size = (buffer_count - 2) *
                        (buffer_count - 2) * sizeof(cl_float3);
 #endif
-    fitter_kernel.setArg(arg_index++, LOCAL_SIZE * sizeof(float), nullptr);
+	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
+	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
+    fitter_kernel.setArg(arg_index++, LOCAL_SIZE * sizeof(float), nullptr);		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
     fitter_kernel.setArg(arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);
     fitter_kernel.setArg(arg_index++, r_size, nullptr);
     fitter_kernel.setArg(arg_index++, weights_buffer);
-    fitter_kernel.setArg(arg_index++, mins_maxs_buffer);
+    fitter_kernel.setArg(arg_index++, mins_maxs_buffer);						// [out]   Min and max of features values per block
 
     arg_index = 0;
     weighted_sum_kernel.setArg(arg_index++, weights_buffer);
@@ -382,9 +393,9 @@ int tasks()
     taa_timer.assign(FRAME_COUNT - 1, clutils::GPUTimer<std::milli>(clEnv.devices[0][0]));
 
     clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_noisy("Accumulation of noisy data");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_copy("Copy input buffer");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_fitter("Fitting feature buffers to noisy data");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_weighted_sum("Weighted sum");
+    clutils::ProfilingInfo<FRAME_COUNT>		profile_info_copy("Copy input buffer");
+    clutils::ProfilingInfo<FRAME_COUNT>		profile_info_fitter("Fitting feature buffers to noisy data");
+    clutils::ProfilingInfo<FRAME_COUNT>		profile_info_weighted_sum("Weighted sum");
     clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_filtered("Accumulation of filtered data");
     clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_taa("TAA");
     clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_total("Total time in all kernels (including intermediate launch overheads)");
@@ -392,7 +403,7 @@ int tasks()
     printf("Run and profile kernels.\n");
     // Note: in real use case there would not be WriteBuffer and ReadBuffer function calls
     // because the input data comes from the path tracer and output goes to the screen
-    for (int frame = 0; frame < FRAME_COUNT; ++frame)
+    for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
 		const cl_bool blocking_write = true;
 		// https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/clEnqueueWriteBuffer.html
@@ -459,9 +470,9 @@ int tasks()
     queue.finish();
 
     // Store profiling data
-    for (int i = 0; i < FRAME_COUNT; ++i)
+    for(int i = 0; i < FRAME_COUNT; ++i)
     {
-        if (i > 0)
+        if(i > 0)
         {
             profile_info_accum_noisy[i - 1] = accum_noisy_timer[i - 1].duration();
             profile_info_accum_filtered[i - 1] = accum_filtered_timer[i - 1].duration();
@@ -478,11 +489,11 @@ int tasks()
         profile_info_weighted_sum[i] = weighted_sum_timer[i].duration();
     }
 
-    if (FRAME_COUNT > 1)
+    if(FRAME_COUNT > 1)
         profile_info_accum_noisy.print();
     profile_info_fitter.print();
     profile_info_weighted_sum.print();
-    if (FRAME_COUNT > 1)
+    if(FRAME_COUNT > 1)
     {
         profile_info_accum_filtered.print();
         profile_info_taa.print();
@@ -492,9 +503,9 @@ int tasks()
     // Store results
     error = false;
 	#pragma omp parallel for
-    for (int frame = 0; frame < FRAME_COUNT; ++frame)
+    for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
-        if (error)
+        if(error)
             continue;
 
         // Output image
@@ -504,7 +515,7 @@ int tasks()
                                     OpenImageIO::TypeDesc::FLOAT);
         std::unique_ptr<OpenImageIO::ImageOutput>
             out(OpenImageIO::ImageOutput::create(output_file_name));
-        if (out && out->open(output_file_name, spec))
+        if(out && out->open(output_file_name, spec))
         {
             out->write_image(OpenImageIO::TypeDesc::FLOAT, out_data[frame].data(),
                              3 * sizeof(cl_float), WORKSET_WIDTH * 3 * sizeof(cl_float), 0);
@@ -519,7 +530,7 @@ int tasks()
         }
     }
 
-    if (error)
+    if(error)
     {
         printf("One or more errors occurred during image saving\n");
         return 1;
@@ -543,7 +554,7 @@ int main()
         printf("Exception: %s", err.what());
         std::exception *err_ptr = &err;
         cl::Error *cl_err = dynamic_cast<cl::Error *>(err_ptr);
-        if (cl_err != nullptr)
+        if(cl_err != nullptr)
         {
             printf(" call with error code %i = %s\n",
                    cl_err->err(), clutils::getOpenCLErrorCodeString(cl_err->err()));
