@@ -271,7 +271,12 @@ namespace clutils
 
             // Create a sources object with all kernel files
             cl::Program::Sources sources;
-            readSource (kernel_filenames, sources);
+
+			std::vector<std::string> sources_vec;
+            readSource(kernel_filenames, sources_vec);
+
+			for(std::string const & str : sources_vec)
+				sources.push_back({str.c_str(), str.length()});
 
             // Create a program object from the source codes, targeting context 0
             programs.emplace_back (contexts[0], sources);
@@ -281,6 +286,8 @@ namespace clutils
                 // Build the program for all devices in context 0 (platform 0)
                 programs[0].build (devices[0], build_options);
             }
+			catch(...) { }
+			/*
             catch (const cl::Error &error)
             {
                 std::cerr << error.what ()
@@ -291,7 +298,7 @@ namespace clutils
                 std::cout << log << std::endl;
 
                 exit (EXIT_FAILURE);
-            }
+            }*/
 
             // Get the kernel names
             // Note: getInfo returns a ';' delimited string.
@@ -462,7 +469,8 @@ namespace clutils
                 #endif
 
                 if (!checkCLGLInterop (device))
-                    throw cl::Error (CL_INVALID_DEVICE, "CLEnv::addContext");
+					std::cout << "Invalid device" << std::endl;
+                    //throw cl::Error (CL_INVALID_DEVICE, "CLEnv::addContext");
 
                 props = _props;
             }
@@ -573,7 +581,12 @@ namespace clutils
         {
             // Create a sources object with all kernel files
             cl::Program::Sources sources;
-            readSource (kernel_filenames, sources);
+
+			std::vector<std::string> sources_vec;
+            readSource(kernel_filenames, sources_vec);
+
+			for(std::string const & str : sources_vec)
+				sources.push_back({str.c_str(), str.length()});
 
             // Create a program object from the source codes, 
             // targeting the requested context
@@ -585,8 +598,21 @@ namespace clutils
 
             try
             {
-                programs[pgIdx].build (devs, build_options);
+                cl_int ret = programs[pgIdx].build (devs, build_options);
+				if(ret != CL_SUCCESS)
+				{
+					std::cout << "Failed to build program: " << ret << std::endl;
+					std::string log = programs[pgIdx].getBuildInfo<CL_PROGRAM_BUILD_LOG> (devs[0]);
+					std::cout << log << std::endl;
+				}
             }
+			catch(...)
+			{ 
+				std::cout << "Failed to build program" << std::endl;
+				std::string log = programs[pgIdx].getBuildInfo<CL_PROGRAM_BUILD_LOG> (devs[0]);
+                std::cout << log << std::endl;
+			}
+			/*
             catch (const cl::Error &error)
             {
                 std::cerr << error.what ()
@@ -597,7 +623,7 @@ namespace clutils
                 std::cout << log << std::endl;
 
                 exit (EXIT_FAILURE);
-            }
+            }*/
 
             // Get the kernel names
             // Note: getInfo returns a ';' delimited string.

@@ -24,6 +24,7 @@
 
 #include "OpenImageIO/imageio.h"
 #include "CLUtils/CLUtils.hpp"
+#include <functional>
 
 #define _CRT_SECURE_NO_WARNINGS
 #define STR_HELPER(x) #x
@@ -41,7 +42,7 @@
 // TODO detect FRAME_COUNT from the input files
 #define FRAME_COUNT 60
 // Location where input frames and feature buffers are located
-#define INPUT_DATA_PATH ../data/frames
+#define INPUT_DATA_PATH ../data/classroom/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
 // camera_matrices.h is expected to be in the same folder
 #include STR(INPUT_DATA_PATH/camera_matrices.h)
@@ -82,10 +83,10 @@
 #define COMPRESSED_R 1
 // If 1 stores tmp_data to private memory when it is loaded for dot product calculation
 #define CACHE_TMP_DATA 1
-// If 1 tmp_data buffer is in half precision for faster load and store.
+// If 1 features_data buffer is in half precision for faster load and store.
 // NOTE: if world position values are greater than 256 this cannot be used because
 // 256*256 is infinity in half-precision
-#define USE_HALF_PRECISION_IN_TMP_DATA 1
+#define USE_HALF_PRECISION_IN_FEATURES_DATA 1
 // If 1 adds __attribute__((reqd_work_group_size(256, 1, 1))) to fitter and
 // accumulate_noisy_data kernels. With some codes, attribute made the kernels faster and
 // with some it slowed them down.
@@ -178,7 +179,6 @@ float clamp(float value, float minimum, float maximum)
 
 int tasks()
 {
-
     printf("Initialize.\n");
     clutils::CLEnv clEnv;
     cl::Context &context(clEnv.addContext(PLATFORM_INDEX));
@@ -192,13 +192,10 @@ int tasks()
 
     std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
     std::string features_scaled(SCALED_FEATURE_BUFFERS);
-    const int features_not_scaled_count =
-        std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
+    const int features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
     // + 1 because last one does not have ',' after it.
-    const int features_scaled_count =
-        std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
-
-    // + 3 stands for three noisy channels.
+    const int features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
+    // + 3 stands for three noisy spp color channels.
     const int buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
     // Create and build the kernel
@@ -229,18 +226,16 @@ int tasks()
         " -D CACHE_TMP_DATA=" << STR(CACHE_TMP_DATA) <<
         " -D ADD_REQD_WG_SIZE=" << STR(ADD_REQD_WG_SIZE) <<
         " -D LOCAL_SIZE=" << STR(LOCAL_SIZE) <<
-        " -D USE_HALF_PRECISION_IN_TMP_DATA=" << STR(USE_HALF_PRECISION_IN_TMP_DATA);
+        " -D USE_HALF_PRECISION_IN_FEATURES_DATA=" << STR(USE_HALF_PRECISION_IN_FEATURES_DATA);
 
-    cl::Kernel &fitter_kernel(clEnv.addProgram(0, "bmfr.cl", "fitter",
-        build_options.str().c_str()));
-    cl::Kernel &weighted_sum_kernel(clEnv.addProgram(0, "bmfr.cl", "weighted_sum",
-        build_options.str().c_str()));
-    cl::Kernel &accum_noisy_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_noisy_data",
-        build_options.str().c_str()));
-    cl::Kernel &accum_filtered_kernel(clEnv.addProgram(0, "bmfr.cl", 
-        "accumulate_filtered_data", build_options.str().c_str()));
-    cl::Kernel &taa_kernel(clEnv.addProgram(0, "bmfr.cl", "taa",
-        build_options.str().c_str()));
+	// Phase I
+	// 3.2 Preprocessing: temporal accumulation of the noisy 1 spp data, which reprojects the previous accumulated data to the new camera frame
+    cl::Kernel &accum_noisy_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_noisy_data", build_options.str().c_str()));
+
+    cl::Kernel &fitter_kernel(clEnv.addProgram(0, "bmfr.cl", "fitter", build_options.str().c_str()));
+    cl::Kernel &weighted_sum_kernel(clEnv.addProgram(0, "bmfr.cl", "weighted_sum", build_options.str().c_str()));
+    cl::Kernel &accum_filtered_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_filtered_data", build_options.str().c_str()));
+    cl::Kernel &taa_kernel(clEnv.addProgram(0, "bmfr.cl", "taa", build_options.str().c_str()));
 
     cl::NDRange accum_global(WORKSET_WITH_MARGINS_WIDTH, WORKSET_WITH_MARGINS_HEIGHT);
     cl::NDRange output_global(WORKSET_WIDTH, WORKSET_HEIGHT);
@@ -248,7 +243,7 @@ int tasks()
     cl::NDRange fitter_global(FITTER_GLOBAL);
     cl::NDRange fitter_local(LOCAL_SIZE);
 
-    // Data arrays
+    // Load input data arrays from disk to host memory
     printf("Loading input data.\n");
     std::vector<cl_float> out_data[FRAME_COUNT];
     std::vector<cl_float> albedos[FRAME_COUNT];
@@ -256,7 +251,7 @@ int tasks()
     std::vector<cl_float> positions[FRAME_COUNT];
     std::vector<cl_float> noisy_input[FRAME_COUNT];
     bool error = false;
-#pragma omp parallel for
+	#pragma omp parallel for
     for (int frame = 0; frame < FRAME_COUNT; ++frame)
     {
         if (error)
@@ -312,35 +307,25 @@ int tasks()
         return 1;
     }
 
-    // Create buffers
-    Double_buffer<cl::Buffer> normals_buffer(context,
-                                             CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> positions_buffer(context,
-                                               CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> noisy_buffer(context,
-                                           CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    size_t in_buffer_data_size = USE_HALF_PRECISION_IN_TMP_DATA ? sizeof(cl_half) : sizeof(cl_float);
-    cl::Buffer in_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT *
-                         buffer_count * in_buffer_data_size, nullptr);
-    cl::Buffer filtered_buffer(context, CL_MEM_READ_WRITE,
-                               OUTPUT_SIZE * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> out_buffer(context, CL_MEM_READ_WRITE,
-                                         WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> result_buffer(context, CL_MEM_READ_WRITE,
-                                            OUTPUT_SIZE * 3 * sizeof(cl_float));
-    cl::Buffer prev_pixels_buffer(context, CL_MEM_READ_WRITE,
-                                  OUTPUT_SIZE * sizeof(cl_float2));
+    // Create OpenCL buffers
+    Double_buffer<cl::Buffer> normals_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> noisy_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+    size_t in_buffer_data_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+    cl::Buffer in_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * in_buffer_data_size, nullptr);
+    cl::Buffer filtered_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> out_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> result_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    cl::Buffer prev_pixels_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2));
     cl::Buffer accept_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar));
-    cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY,
-                             IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
-    cl::Buffer tone_mapped_buffer(context, CL_MEM_READ_WRITE,
-                                  IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
-    cl::Buffer weights_buffer(context, CL_MEM_READ_WRITE,
-                              (FITTER_GLOBAL / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
-    cl::Buffer mins_maxs_buffer(context, CL_MEM_READ_WRITE,
-                                (FITTER_GLOBAL / 256) * 6 * sizeof(cl_float2));
-    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE,
-                                         OUTPUT_SIZE * sizeof(cl_char));
+    cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
+    cl::Buffer tone_mapped_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
+    cl::Buffer weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_GLOBAL / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
+    cl::Buffer mins_maxs_buffer(context, CL_MEM_READ_WRITE, (FITTER_GLOBAL / 256) * 6 * sizeof(cl_float2));
+
+	// Number of samples accumulated (for cumulative moving average)
+    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_char));
 
     std::vector<Double_buffer<cl::Buffer> *> all_double_buffers = {
         &normals_buffer, &positions_buffer, &noisy_buffer,
@@ -348,8 +333,8 @@ int tasks()
 
     // Set kernel arguments
     int arg_index = 0;
-    accum_noisy_kernel.setArg(arg_index++, prev_pixels_buffer);
-    accum_noisy_kernel.setArg(arg_index++, accept_buffer);
+    accum_noisy_kernel.setArg(arg_index++, prev_pixels_buffer); // [out]: Previous frame pixel coordinates (after reprojection)
+    accum_noisy_kernel.setArg(arg_index++, accept_buffer); // [out]: Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
     arg_index = 0;
 #if COMPRESSED_R
@@ -396,92 +381,80 @@ int tasks()
     accum_filtered_timer.assign(FRAME_COUNT - 1, clutils::GPUTimer<std::milli>(clEnv.devices[0][0]));
     taa_timer.assign(FRAME_COUNT - 1, clutils::GPUTimer<std::milli>(clEnv.devices[0][0]));
 
-    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_noisy(
-        "Accumulation of noisy data");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_copy(
-        "Copy input buffer");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_fitter(
-        "Fitting feature buffers to noisy data");
-    clutils::ProfilingInfo<FRAME_COUNT> profile_info_weighted_sum(
-        "Weighted sum");
-    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_filtered(
-        "Accumulation of filtered data");
-    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_taa(
-        "TAA");
-    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_total(
-        "Total time in all kernels (including intermediate launch overheads)");
+    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_noisy("Accumulation of noisy data");
+    clutils::ProfilingInfo<FRAME_COUNT> profile_info_copy("Copy input buffer");
+    clutils::ProfilingInfo<FRAME_COUNT> profile_info_fitter("Fitting feature buffers to noisy data");
+    clutils::ProfilingInfo<FRAME_COUNT> profile_info_weighted_sum("Weighted sum");
+    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_accum_filtered("Accumulation of filtered data");
+    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_taa("TAA");
+    clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_total("Total time in all kernels (including intermediate launch overheads)");
 
     printf("Run and profile kernels.\n");
     // Note: in real use case there would not be WriteBuffer and ReadBuffer function calls
     // because the input data comes from the path tracer and output goes to the screen
     for (int frame = 0; frame < FRAME_COUNT; ++frame)
     {
+		const cl_bool blocking_write = true;
+		// https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/clEnqueueWriteBuffer.html
+		// Enqueue commands to write to a buffer object from host memory (= cudaMemcpy(..., cudaMemcpyHostToDevice))
+        queue.enqueueWriteBuffer(albedo_buffer, blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), albedos[frame].data());
+        queue.enqueueWriteBuffer(*normals_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), normals[frame].data());
+        queue.enqueueWriteBuffer(*positions_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), positions[frame].data());
+        queue.enqueueWriteBuffer(*noisy_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), noisy_input[frame].data());
 
-        queue.enqueueWriteBuffer(albedo_buffer, true, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 *
-                                 sizeof(cl_float), albedos[frame].data());
-        queue.enqueueWriteBuffer(*normals_buffer.current(), true, 0, IMAGE_WIDTH *
-                                 IMAGE_HEIGHT * 3 * sizeof(cl_float), normals[frame].data());
-        queue.enqueueWriteBuffer(*positions_buffer.current(), true, 0, IMAGE_WIDTH *
-                                 IMAGE_HEIGHT * 3 * sizeof(cl_float), positions[frame].data());
-        queue.enqueueWriteBuffer(*noisy_buffer.current(), true, 0, IMAGE_WIDTH * IMAGE_HEIGHT *
-                                 3 * sizeof(cl_float), noisy_input[frame].data());
-
-        // On the first frame accum_noisy_kernel just copies to the in_buffer
+		// Phase I:
+		//  - accumulate noisy 1spp
+		//  - compute previous frame pixel coordinates (after reprojection)
+		//  - generate validity bit mask of bilinear samples of previous frame
+		//  - concatenate the different features in a single buffer
+        // Note: On the first frame accum_noisy_kernel just copies to the in_buffer
         arg_index = 2;
-        accum_noisy_kernel.setArg(arg_index++, *normals_buffer.current());
-        accum_noisy_kernel.setArg(arg_index++, *normals_buffer.previous());
-        accum_noisy_kernel.setArg(arg_index++, *positions_buffer.current());
-        accum_noisy_kernel.setArg(arg_index++, *positions_buffer.previous());
-        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.current());
-        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.previous());
-        accum_noisy_kernel.setArg(arg_index++, *spp_buffer.previous());
-        accum_noisy_kernel.setArg(arg_index++, *spp_buffer.current());
-        accum_noisy_kernel.setArg(arg_index++, in_buffer);
+        accum_noisy_kernel.setArg(arg_index++, *normals_buffer.current());			// [in]  Current  (world) normals
+        accum_noisy_kernel.setArg(arg_index++, *normals_buffer.previous());			// [in]  Previous (world) normals
+        accum_noisy_kernel.setArg(arg_index++, *positions_buffer.current());		// [in]  Current  world positions
+        accum_noisy_kernel.setArg(arg_index++, *positions_buffer.previous());		// [in]  Previous world positions
+        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.current());			// [out] Current  noisy 1spp
+        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.previous());			// [in]  Previous noisy 1spp
+        accum_noisy_kernel.setArg(arg_index++, *spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
+        accum_noisy_kernel.setArg(arg_index++, *spp_buffer.current());				// [out] Current  number of samples accumulated (for CMA)
+        accum_noisy_kernel.setArg(arg_index++, in_buffer);							// [out] Features buffer (half or single-precision)
         const int matrix_index = frame == 0 ? 0 : frame - 1;
-        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float16),
-                                  &(camera_matrices[matrix_index][0][0]));
-        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float2),
-                                  &(pixel_offsets[frame][0]));
-        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
-        queue.enqueueNDRangeKernel(accum_noisy_kernel, cl::NullRange, accum_global, local,
-                                   nullptr, &accum_noisy_timer[matrix_index].event());
+        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0])); // ViewProj matrix of previous frame
+        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0]));
+        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_int), &frame); // Current frame number
+        queue.enqueueNDRangeKernel(accum_noisy_kernel, cl::NullRange, accum_global, local, nullptr, &accum_noisy_timer[matrix_index].event());
 
+		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
         arg_index = 5;
-        fitter_kernel.setArg(arg_index++, in_buffer);
-        fitter_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
-        queue.enqueueNDRangeKernel(fitter_kernel, cl::NullRange, fitter_global,
-                                   fitter_local, nullptr, &fitter_timer[frame].event());
+        fitter_kernel.setArg(arg_index++, in_buffer); // [in] Features buffer (half or single-precision)
+        fitter_kernel.setArg(arg_index++, sizeof(cl_int), &frame); // Current frame number
+        queue.enqueueNDRangeKernel(fitter_kernel, cl::NullRange, fitter_global, fitter_local, nullptr, &fitter_timer[frame].event());
 
         arg_index = 3;
         weighted_sum_kernel.setArg(arg_index++, *normals_buffer.current());
         weighted_sum_kernel.setArg(arg_index++, *positions_buffer.current());
         weighted_sum_kernel.setArg(arg_index++, *noisy_buffer.current());
         weighted_sum_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
-        queue.enqueueNDRangeKernel(weighted_sum_kernel, cl::NullRange, output_global,
-                                   local, nullptr, &weighted_sum_timer[frame].event());
+        queue.enqueueNDRangeKernel(weighted_sum_kernel, cl::NullRange, output_global, local, nullptr, &weighted_sum_timer[frame].event());
 
         arg_index = 5;
         accum_filtered_kernel.setArg(arg_index++, *spp_buffer.current());
         accum_filtered_kernel.setArg(arg_index++, *out_buffer.previous());
         accum_filtered_kernel.setArg(arg_index++, *out_buffer.current());
         accum_filtered_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
-        queue.enqueueNDRangeKernel(accum_filtered_kernel, cl::NullRange, output_global,
-                                   local, nullptr, &accum_filtered_timer[matrix_index].event());
+        queue.enqueueNDRangeKernel(accum_filtered_kernel, cl::NullRange, output_global, local, nullptr, &accum_filtered_timer[matrix_index].event());
 
         arg_index = 2;
         taa_kernel.setArg(arg_index++, *result_buffer.current());
         taa_kernel.setArg(arg_index++, *result_buffer.previous());
         taa_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
-        queue.enqueueNDRangeKernel(taa_kernel, cl::NullRange, output_global, local,
-                                   nullptr, &taa_timer[matrix_index].event());
+        queue.enqueueNDRangeKernel(taa_kernel, cl::NullRange, output_global, local, nullptr, &taa_timer[matrix_index].event());
 
         // This is not timed because in real use case the result is stored to frame buffer
-        queue.enqueueReadBuffer(*result_buffer.current(), false, 0,
-                                OUTPUT_SIZE * 3 * sizeof(cl_float), out_data[frame].data());
+        queue.enqueueReadBuffer(*result_buffer.current(), false, 0, OUTPUT_SIZE * 3 * sizeof(cl_float), out_data[frame].data());
 
         // Swap all double buffers
-        std::for_each(all_double_buffers.begin(), all_double_buffers.end(),
-                      std::bind(&Double_buffer<cl::Buffer>::swap, std::placeholders::_1));
+        std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<cl::Buffer>::swap, std::placeholders::_1));
     }
     queue.finish();
 
@@ -518,7 +491,7 @@ int tasks()
 
     // Store results
     error = false;
-#pragma omp parallel for
+	#pragma omp parallel for
     for (int frame = 0; frame < FRAME_COUNT; ++frame)
     {
         if (error)
@@ -561,7 +534,11 @@ int main()
     {
         return tasks();
     }
-    catch (std::exception &err)
+	catch(...)
+	{
+		return 1;
+	}
+    /*catch (std::exception &err)
     {
         printf("Exception: %s", err.what());
         std::exception *err_ptr = &err;
@@ -574,5 +551,5 @@ int main()
         }
         printf("\n");
         return 1;
-    }
+    }*/
 }
