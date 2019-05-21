@@ -343,8 +343,8 @@ int tasks()
 
     // Set kernel arguments
     int arg_index = 0;
-    accum_noisy_kernel.setArg(arg_index++, prev_pixels_buffer); // [out]: Previous frame pixel coordinates (after reprojection)
-    accum_noisy_kernel.setArg(arg_index++, accept_buffer); // [out]: Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
+    accum_noisy_kernel.setArg(arg_index++, prev_pixels_buffer); // [out] Previous frame pixel coordinates (after reprojection)
+    accum_noisy_kernel.setArg(arg_index++, accept_buffer);		// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
     arg_index = 0;
 #if COMPRESSED_R
@@ -370,19 +370,19 @@ int tasks()
     fitter_kernel.setArg(arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);	// [local] Shared memory used to store the 'u' vectors
     fitter_kernel.setArg(arg_index++, r_size, nullptr);							// [local] Shared memory used to store the R matrix of the QR factorization
     fitter_kernel.setArg(arg_index++, weights_buffer);							// [out]   Features weights
-    fitter_kernel.setArg(arg_index++, mins_maxs_buffer);						// [out]   Min and max of features values per block
+    fitter_kernel.setArg(arg_index++, mins_maxs_buffer);						// [out]   Min and max of features values per block (world_positions)
 
     arg_index = 0;
-    weighted_sum_kernel.setArg(arg_index++, weights_buffer);
-    weighted_sum_kernel.setArg(arg_index++, mins_maxs_buffer);
-    weighted_sum_kernel.setArg(arg_index++, filtered_buffer);
+    weighted_sum_kernel.setArg(arg_index++, weights_buffer);	// [in]	 Features weights computed by the fitter kernel
+    weighted_sum_kernel.setArg(arg_index++, mins_maxs_buffer);  // [in]  Min and max of features values per block (world_positions)
+    weighted_sum_kernel.setArg(arg_index++, filtered_buffer);	// [out] Output color (estimate of the noise free color)
 
     arg_index = 0;
-    accum_filtered_kernel.setArg(arg_index++, filtered_buffer);
-    accum_filtered_kernel.setArg(arg_index++, prev_pixels_buffer);
-    accum_filtered_kernel.setArg(arg_index++, accept_buffer);
-    accum_filtered_kernel.setArg(arg_index++, albedo_buffer);
-    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);
+    accum_filtered_kernel.setArg(arg_index++, filtered_buffer);		// [in]  Noise free color estimate (computed as the weighted sum of the features)
+    accum_filtered_kernel.setArg(arg_index++, prev_pixels_buffer);	// [in]  Previous frame pixel coordinates (after reprojection)
+    accum_filtered_kernel.setArg(arg_index++, accept_buffer);		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+    accum_filtered_kernel.setArg(arg_index++, albedo_buffer);		// [in]  Albedo buffer of the current frame (non-noisy)
+    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);	// [out] Accumulated and tonemapped noise-free color
 
     arg_index = 0;
     taa_kernel.setArg(arg_index++, prev_pixels_buffer);
@@ -434,37 +434,42 @@ int tasks()
         accum_noisy_kernel.setArg(arg_index++, *normals_buffer.previous());			// [in]  Previous (world) normals
         accum_noisy_kernel.setArg(arg_index++, *positions_buffer.current());		// [in]  Current  world positions
         accum_noisy_kernel.setArg(arg_index++, *positions_buffer.previous());		// [in]  Previous world positions
-        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.current());			// [out] Current  noisy 1spp
-        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.previous());			// [in]  Previous noisy 1spp
+        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.current());			// [out] Current  noisy 1spp color
+        accum_noisy_kernel.setArg(arg_index++, *noisy_buffer.previous());			// [in]  Previous noisy 1spp color
         accum_noisy_kernel.setArg(arg_index++, *spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
         accum_noisy_kernel.setArg(arg_index++, *spp_buffer.current());				// [out] Current  number of samples accumulated (for CMA)
         accum_noisy_kernel.setArg(arg_index++, in_buffer);							// [out] Features buffer (half or single-precision)
         const int matrix_index = frame == 0 ? 0 : frame - 1;
-        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0])); // ViewProj matrix of previous frame
+        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0])); // [in] ViewProj matrix of previous frame
         accum_noisy_kernel.setArg(arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0]));
-        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_int), &frame); // Current frame number
+        accum_noisy_kernel.setArg(arg_index++, sizeof(cl_int), &frame); // [in] Current frame number
         queue.enqueueNDRangeKernel(accum_noisy_kernel, cl::NullRange, accum_global, local, nullptr, &accum_noisy_timer[matrix_index].event());
 
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
+		// -> compute features weightss
         arg_index = 5;
-        fitter_kernel.setArg(arg_index++, in_buffer); // [in] Features buffer (half or single-precision)
-        fitter_kernel.setArg(arg_index++, sizeof(cl_int), &frame); // Current frame number
+        fitter_kernel.setArg(arg_index++, in_buffer);				// [in] Features buffer (half or single-precision)
+        fitter_kernel.setArg(arg_index++, sizeof(cl_int), &frame);  // [in] Current frame number
         queue.enqueueNDRangeKernel(fitter_kernel, cl::NullRange, fitter_global, fitter_local, nullptr, &fitter_timer[frame].event());
 
+		// Phase II: Compute noise free color estimate (weighted sum of features)
         arg_index = 3;
-        weighted_sum_kernel.setArg(arg_index++, *normals_buffer.current());
-        weighted_sum_kernel.setArg(arg_index++, *positions_buffer.current());
-        weighted_sum_kernel.setArg(arg_index++, *noisy_buffer.current());
-        weighted_sum_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
+        weighted_sum_kernel.setArg(arg_index++, *normals_buffer.current());		// [in] Current (world) normals
+        weighted_sum_kernel.setArg(arg_index++, *positions_buffer.current());	// [in] Current world positions
+        weighted_sum_kernel.setArg(arg_index++, *noisy_buffer.current());		// [in] Current noisy 1spp color (only used for debugging)
+        weighted_sum_kernel.setArg(arg_index++, sizeof(cl_int), &frame);		// [in] Current frame number
         queue.enqueueNDRangeKernel(weighted_sum_kernel, cl::NullRange, output_global, local, nullptr, &weighted_sum_timer[frame].event());
 
+		// Phase III: Postprocessing
+		// -> accumulate noise-free color estimate + output a tonemapped version
         arg_index = 5;
-        accum_filtered_kernel.setArg(arg_index++, *spp_buffer.current());
-        accum_filtered_kernel.setArg(arg_index++, *out_buffer.previous());
-        accum_filtered_kernel.setArg(arg_index++, *out_buffer.current());
-        accum_filtered_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
+        accum_filtered_kernel.setArg(arg_index++, *spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
+        accum_filtered_kernel.setArg(arg_index++, *out_buffer.previous());	// [in]  Previous frame noise-free accumulated estimate 
+        accum_filtered_kernel.setArg(arg_index++, *out_buffer.current());	// [out] Current frame noise-free accumulated estimate
+        accum_filtered_kernel.setArg(arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
         queue.enqueueNDRangeKernel(accum_filtered_kernel, cl::NullRange, output_global, local, nullptr, &accum_filtered_timer[matrix_index].event());
 
+		// Phase III: Temporal antialiasing
         arg_index = 2;
         taa_kernel.setArg(arg_index++, *result_buffer.current());
         taa_kernel.setArg(arg_index++, *result_buffer.previous());

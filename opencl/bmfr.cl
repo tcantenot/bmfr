@@ -298,6 +298,8 @@ __constant int2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
    (int2){  -6,   4 }
 };
 
+// TODO: make two versions of accumulate_noisy_data kernel: one for frame 0 and another for the rest (avoid branch)
+
 // https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/functionQualifiers.html
 // The optional __attribute__((reqd_work_group_size(X, Y, Z))) is the work-group size that MUST be used as
 // the local_work_size argument to clEnqueueNDRangeKernel.
@@ -312,8 +314,8 @@ __kernel void accumulate_noisy_data(
 	const __global float* restrict previous_normals,		// [in]  Previous (world) normals
 	const __global float* restrict current_positions,		// [in]  Current  world positions
 	const __global float* restrict previous_positions,		// [in]  Previous world positions
-		  __global float* restrict current_noisy,			// [out] Current  noisy 1spp
-	const __global float* restrict previous_noisy,			// [in]  Previous noisy 1spp
+		  __global float* restrict current_noisy,			// [out] Current  noisy 1spp color
+	const __global float* restrict previous_noisy,			// [in]  Previous noisy 1spp color
 	const __global unsigned char* restrict previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
 		  __global unsigned char* restrict current_spp,		// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
@@ -321,9 +323,9 @@ __kernel void accumulate_noisy_data(
 	#else
 	__global float* restrict features_data,					// [out] Features buffer (single-precision)
 	#endif
-      const float16 prev_frame_camera_matrix,				// ViewProj matrix of previous frame
+      const float16 prev_frame_camera_matrix,				// [in]  ViewProj matrix of previous frame
       const float2 pixel_offset,
-      const int frame_number								// Current frame number
+      const int frame_number								// [in]  Current frame number
 )
 {
 	// CUDA equivalent:
@@ -334,7 +336,7 @@ __kernel void accumulate_noisy_data(
 	// Mirror indexed of the input. x and y are always less than one size out of
 	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
 	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const int2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT];
+	const int2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly frame_number % BLOCK_OFFSETS_COUNT
 
 	// Pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const int2 pixel = mirror2(pixel_without_mirror, (int2){IMAGE_WIDTH, IMAGE_HEIGHT});
@@ -388,8 +390,8 @@ __kernel void accumulate_noisy_data(
 		prev_frame_uv.y = dot(prev_frame_camera_matrix.s159d, world_position); // Transform y
 		// No need for z-buffer in accumulation of the noisy data
 		// -> might be useful if we use it to detect disocclusion
-		// --> compare previous z (store previous frame Z-buffer) with prev_frame_pixel.z
-		//prev_frame_pixel.z = dot(prev_frame_camera_matrix.s26ae, world_position); // Transform z
+		// --> compare previous z (store previous frame Z-buffer) with prev_frame_pixel_uv.z
+		//prev_frame_uv.z = dot(prev_frame_camera_matrix.s26ae, world_position); // Transform z
 		prev_frame_uv /= dot(prev_frame_camera_matrix.s37bf, world_position);
 		prev_frame_uv += 1.f; prev_frame_uv /= 2.f; // prev_frame_uv = prev_frame_uv * 0.5f + 0.5f;
 
@@ -502,7 +504,7 @@ __kernel void accumulate_noisy_data(
 	if(blend_alpha < 1.f) // alpha = 1.f means we ignore history
 	{
 		// Note: we accumulate at most 255 samples for the cumulative moving average (which is more than enough because of
-		// the threshold BLEND_ALPHA to switch exponential moving average).
+		// the threshold BLEND_ALPHA that switch to exponential moving average).
 		// E.g: BLEND_ALPHA = 0.2 = 1 / (n + 1) <=> n = (1 - 0.2) / 0.2 = 4 => above 4 samples for a pixel, we switch to
 		// exponential moving average with alpha = 20%
 		// _sat is just extra causion because sample_spp should be less equal than 254
@@ -510,7 +512,7 @@ __kernel void accumulate_noisy_data(
 	}
 	current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
 
-	float3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // lerp(previous_color, current_color, blend_alpha);
+	float3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // Lerp(previous_color, current_color, blend_alpha);
 
 
 	// The set of feature buffers used in the fitting
@@ -574,6 +576,9 @@ __kernel void accumulate_noisy_data(
 // --> avoid parallel reduction for higher order features
 // --> avoid output min/max that is used to scale the scaled features in the kernel "weighted_sum"
 //	   (there seems to be double scaling: once in fitter and once weighted_sum...)
+//
+// OR directly generate a normalized world_position by dividing by the bbox of the scene or some value + saturate
+// -> allow to skip parallel min/max reductions altogether
 
 // Note: The __local or local address space name is used to describe variables that need to be allocated in local memory
 // and are shared by all work-items of a work-group. (https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/local.html)
@@ -582,17 +587,17 @@ __kernel void accumulate_noisy_data(
 __attribute__((reqd_work_group_size(256, 1, 1)))
 #endif
 __kernel void fitter(
-	__local float *pr_data_256,						// [local] Shared memory used to perform parrallel reduction (max, min, sum)
-	__local float *u_vec,							// [local] Shared memory used to store the 'u' vectors
-	__local float3 *r_mat,							// [local] Shared memory used to store the R matrix of the QR factorization
+	__local  float*  pr_data_256,						// [local] Shared memory used to perform parrallel reduction (max, min, sum)
+	__local  float*  u_vec,							// [local] Shared memory used to store the 'u' vectors
+	__local  float3* r_mat,							// [local] Shared memory used to store the R matrix of the QR factorization
 	__global float* restrict weights,				// [out]   Features weights
-	__global float* restrict mins_maxs,				// [out]   Min and max of features values per block
+	__global float* restrict mins_maxs,				// [out]   Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	__global half* restrict tmp_data,				// [out]   Features buffer (half-precision)
 	#else
 	__global float* restrict tmp_data,				// [out]   Features buffer (single-precision)
 	#endif
-	const int frame_number							// Current frame number
+	const int frame_number							// [in]	   Current frame number
 )
 {
 	__local float u_length_squared;					// Local variable (i.e shared across threads in group) that holds the 'u' vector square length
@@ -718,7 +723,6 @@ __kernel void fitter(
 		{
 			// Copy u_vec value
 			r_value = u_vec[id];
-
 		}
 		else if(id == col)
 		{
@@ -728,7 +732,6 @@ __kernel void fitter(
 			u_length_squared += u_vec[col_limited] * u_vec[col_limited];
 			// (u_length_squared is now updated length squared)
 			r_value = vec_length;
-
 		}
 		else if(id > col) //Could have "&& id <  R_EDGE" but this is little bit faster
 		{
@@ -764,8 +767,10 @@ __kernel void fitter(
 					// Load feature
 					float tmp = LOAD(tmp_data, IN_ACCESS);
 
-					// Add noise on the first time values are loaded
-					// (does not add noise to constant buffer (column 0) and noisy image data (last 3 columns))
+					// [Section 3.4] - Stochastic regularization
+					// To handle rank-deficiency in the T matrix, add zero-mean noise to the input buffers
+					// (the first time values are loaded), which makes them linearly independent.
+					// Note: does not add noise to constant buffer (column 0) and noisy image data (last 3 columns).
 					if(col == 0 && feature_buffer < buffers - 3)
 					{
 						tmp = add_random(tmp, id, sub_vector, feature_buffer, frame_number);
@@ -876,49 +881,61 @@ __kernel void fitter(
 
 
 __kernel void weighted_sum(
-      const __global float* restrict weights,
-      const __global float* restrict mins_maxs,
-      __global float* restrict output,
-      const __global float* restrict current_normals,
-      const __global float* restrict current_positions,
-      const __global float* restrict current_noisy, // Only used for debugging
-      const int frame_number){
+	const __global float* restrict weights,				// [in]	 Features weights computed by the fitter kernel
+	const __global float* restrict mins_maxs,			// [in]  Min and max of features values per block (world_positions)
+		  __global float* restrict output,				// [out] Output color (estimate of the noise free color)
+	const __global float* restrict current_normals,		// [in]  Current (world) normals
+	const __global float* restrict current_positions,	// [in]  Current world positions
+	const __global float* restrict current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
+	const int frame_number								// [in]  Current frame number
+)
+{
+	// CUDA equivalent:
+	// get_global_id(0) <=> blockIdx.x * blockDim.x + threadIdx.x
+	// get_global_id(1) <=> blockIdx.y * blockDim.y + threadIdx.y
+	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
+	const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
+	
+	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+		return;
 
-   const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
-   const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
-   if(pixel.x >= IMAGE_WIDTH || pixel.y >=  IMAGE_HEIGHT)
-      return;
+	// Linear pixel index
+	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
 
-   // Load weights and min_max which this pixel should use.
-   const int2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT];
-   const int2 offset_pixel = pixel + BLOCK_EDGE_HALF - offset;
-   const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) +
-      (offset_pixel.y / BLOCK_EDGE_LENGTH) *
-      (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH);
+	// Load weights and min_max which this pixel should use.
+	const int2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly 'frame_number%BLOCK_OFFSETS_COUNT'
 
-   // Load feature buffers
-   float3 world_position = load_float3(current_positions, linear_pixel); // Reload here to have values without stochastic regularization noise (TODO: bind the normalized world_position buffer to avoid renormalizing again)
-   float3 normal = load_float3(current_normals, linear_pixel);
-   float features[BUFFER_COUNT - 3] = {
-      FEATURE_BUFFERS
-   };
+	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
+	const int2 offset_pixel = pixel + BLOCK_EDGE_HALF - offset;
+	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH);
 
-   // Weighted sum of the feature buffers
-   float3 color = (float3){0.f, 0.f, 0.f};
-   for(int feature_buffer = 0; feature_buffer < BUFFER_COUNT - 3; feature_buffer++){
-      float feature = features[feature_buffer];
+	// Reload features from buffer here to have values without stochastic regularization noise
+	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)
+	float3 world_position = load_float3(current_positions, linear_pixel); 
+	float3 normal = load_float3(current_normals, linear_pixel);
+	float features[BUFFER_COUNT - 3] =
+	{
+		// TODO: replace with function that fill the array?
+		FEATURE_BUFFERS // expands to 1.f, normal.x, ..., world_position.x, ..., world_position.x * world_position.x, ...
+	};
 
-      // Scale world position buffers
-      if (feature_buffer >= FEATURES_NOT_SCALED) {
-         const int min_max_index = (group_index * FEATURES_SCALED + feature_buffer - FEATURES_NOT_SCALED) * 2;
-         feature = scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
-      }
+	// Weighted sum of the feature buffers
+	float3 color = (float3){0.f, 0.f, 0.f};
+	for(int feature_buffer = 0; feature_buffer < BUFFER_COUNT - 3; feature_buffer++)
+	{
+		float feature = features[feature_buffer];
 
-      // Load weight and sum
-      float3 weight =
-         load_float3(weights, group_index * (BUFFER_COUNT - 3) + feature_buffer);
-      color += weight * feature;
-   }
+		// Scale world position buffers
+		if (feature_buffer >= FEATURES_NOT_SCALED)
+		{
+			const int min_max_index = (group_index * FEATURES_SCALED + feature_buffer - FEATURES_NOT_SCALED) * 2;
+			feature = scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
+		}
+
+		// Load weight and sum
+		float3 weight = load_float3(weights, group_index * (BUFFER_COUNT - 3) + feature_buffer);
+		color += weight * feature;
+	}
 
    // Remove negative values from every component of the fitting results
    color = color < 0.f ? 0.f : color;
@@ -932,101 +949,123 @@ __kernel void weighted_sum(
 }
 
 
+// TODO: make 2 versions: one for frame 0 and one for the rest (avoid a branch)
+
 __kernel void accumulate_filtered_data(
-      const __global float* restrict filtered_frame,
-      const __global float2* restrict in_prev_frame_pixel,
-      const __global unsigned char* restrict accept_bools,
-      const __global float* restrict albedo,
-      __global float* restrict tone_mapped_frame,
-      const __global unsigned char* restrict current_spp,
-      const __global float* restrict accumulated_prev_frame,
-      __global float* restrict accumulated_frame,
-      const int frame_number){
+	const __global float* restrict filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const __global float2* restrict in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const __global unsigned char* restrict accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const __global float* restrict albedo,					// [in]  Albedo buffer of the current frame (non-noisy)
+		  __global float* restrict tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color
+	const __global unsigned char* restrict current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const __global float* restrict accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated estimate 
+		  __global float* restrict accumulated_frame,		// [out] Current frame noise-free accumulated estimate
+	const int frame_number									// [in]  Current frame number
+)
+{
+	// CUDA equivalent:
+	// get_global_id(0) <=> blockIdx.x * blockDim.x + threadIdx.x
+	// get_global_id(1) <=> blockIdx.y * blockDim.y + threadIdx.y
+	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
+	const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
+   
+	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+		return;
 
-   // Return if out of image
-   const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
-   const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
-   if(pixel.x >= IMAGE_WIDTH || pixel.y >=  IMAGE_HEIGHT)
-      return;
+	// Linear pixel index
+	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
 
-   float3 filtered_color = load_float3(filtered_frame, linear_pixel);
-   float3 prev_color = (float3){0.f, 0.f, 0.f};
-   float blend_alpha = 1.f;
+	// Noise-free estimate of the color (computed via a weighted sum of features)
+	float3 filtered_color = load_float3(filtered_frame, linear_pixel);
+	float3 prev_color = (float3){0.f, 0.f, 0.f};
+	float blend_alpha = 1.f;
 
-   //!!!!!!
-   // Add "&& false" to debug other kernels (removes accumulation completely)
-   if(frame_number > 0){
+	// Reproject and accumulate previous frame noise-free estimate
+	//!!!!!!
+	// Add "&& false" to debug other kernels (removes accumulation completely)
+	if(frame_number > 0)
+	{
+		// Bitmask telling which bilinear samples were accepted in the first accumulation kernel
+		const unsigned char accept = accept_bools[linear_pixel];
 
-      // Accept tells which bilinear pixels were accepted in the first accum kernel
-      const unsigned char accept = accept_bools[linear_pixel];
+		if(accept > 0) // If any prev frame sample is accepted
+		{
+			// Pixel coordinates in the previous frame (in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1])
+			const float2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+			
+			// Integer pixel coordinates in the previous frame
+			const int2 prev_frame_pixel_i = convert_int2_rtn(prev_frame_pixel_f);
 
-      if(accept > 0){ // If any prev frame sample is accepted
+			// Compute bilinear weights for bilinear sampling
+			const float2 prev_pixel_fract = prev_frame_pixel_f - convert_float2(prev_frame_pixel_i);
+			const float2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+			
+			float total_weight = 0.f;
 
-         // Bilinear sampling
-         const float2 prev_frame_pixel_f =
-            in_prev_frame_pixel[linear_pixel];
-         const int2 prev_frame_pixel = convert_int2_rtn(prev_frame_pixel_f);
-         const float2 prev_pixel_fract = prev_frame_pixel_f -
-            convert_float2(prev_frame_pixel);
-         const float2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
-         float total_weight = 0.f;
+			// Add valid bilinear samples
 
-         // Accept tells if the sample is acceptable based on world position and normal
-         if(accept & 0x01){
-            float weight = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
-            total_weight += weight;
-            int linear_sample_location =
-               prev_frame_pixel.y * IMAGE_WIDTH + prev_frame_pixel.x;
-            prev_color += weight * load_float3(accumulated_prev_frame,
-               linear_sample_location);
-         }
-         if(accept & 0x02){
-            float weight = prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
-            total_weight += weight;
-            int linear_sample_location =
-               prev_frame_pixel.y * IMAGE_WIDTH + prev_frame_pixel.x + 1;
-            prev_color += weight * load_float3(accumulated_prev_frame,
-               linear_sample_location);
-         }
-         if(accept & 0x04){
-            float weight = one_minus_prev_pixel_fract.x * prev_pixel_fract.y;
-            total_weight += weight;
-            int linear_sample_location =
-               (prev_frame_pixel.y + 1) * IMAGE_WIDTH + prev_frame_pixel.x;
-            prev_color +=  weight * load_float3(accumulated_prev_frame,
-               linear_sample_location);
-         }
-         if(accept & 0x08){
-            float weight = prev_pixel_fract.x * prev_pixel_fract.y;
-            total_weight += weight;
-            int linear_sample_location =
-               (prev_frame_pixel.y + 1) * IMAGE_WIDTH + prev_frame_pixel.x + 1;
-            prev_color += weight * load_float3(accumulated_prev_frame,
-               linear_sample_location);
-         }
+			if(accept & 0x01)
+			{
+				float weight = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
+				int linear_sample_location = prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x;
+				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+				total_weight += weight;
+			}
 
-         if(total_weight > 0.f){
+			if(accept & 0x02)
+			{
+				float weight = prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
+				int linear_sample_location = prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
+				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+				total_weight += weight;
+			}
 
-            // Blend_alpha is dymically decided so that the result is average
-            // of all samples until the cap defined by SECOND_BLEND_ALPHA is reached
-            blend_alpha = 1.f / convert_float(current_spp[linear_pixel]);
-            blend_alpha = fmax(blend_alpha, SECOND_BLEND_ALPHA);
+			if(accept & 0x04)
+			{
+				float weight = one_minus_prev_pixel_fract.x * prev_pixel_fract.y;
+				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x;
+				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+				total_weight += weight;
+			}
 
-            prev_color /= total_weight;
-         }
-      }
-   }
+			if(accept & 0x08)
+			{
+				float weight = prev_pixel_fract.x * prev_pixel_fract.y;
+				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
+				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			}
+
+			if(total_weight > 0.f)
+			{
+				// Blend_alpha is dymically decided so that the result is average
+				// of all samples (cumulative moving average) until the cap defined by
+				// SECOND_BLEND_ALPHA is reached (exponential moving average: EMA_(n+1) = (1 - a) * EMA_n + a * x_(n+1) = lerp(EMA_n, x_(n+1), a))
+
+				// [Section 3.5]
+				// Similarly to the first temporal accumulation we use the cumulative moving average until
+				// the weight of the new sample has reached the chosen SECOND_BLEND_ALPHA (e.g 10%).
+				// Using the cumulative moving average in this second temporal accumulation is crucial since
+				// the first block fitted after an occlusion is more likely to contain outlier data and with
+				// the cumulative moving average it is mixed with subsequent frames more quickly.
+				blend_alpha = 1.f / convert_float(current_spp[linear_pixel]);
+				blend_alpha = fmax(blend_alpha, SECOND_BLEND_ALPHA);
+				prev_color /= total_weight;
+
+				// Note: we accumulate at most 255 samples for the cumulative moving average (which is more than enough because of
+				// the threshold SECOND_BLEND_ALPHA that switch to exponential moving average).
+				// E.g: SECOND_BLEND_ALPHA = 0.1 = 1 / (n + 1) <=> n = (1 - 0.1) / 0.1 = 9 => above 9 samples for a pixel,
+				// we switch to exponential moving average with alpha = 10%
+			}
+		}
+	}
 
    // Mix with colors and store results
-   float3 accumulated_color = blend_alpha * filtered_color +
-      (1.f - blend_alpha) * prev_color;
+   float3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
    store_float3(accumulated_frame, linear_pixel, accumulated_color);
 
    // Remodulate albedo and tone map
    float3 my_albedo = load_float3(albedo, linear_pixel);
-   const float3 tone_mapped_color = clamp(
-      powr(max(0.f, my_albedo * accumulated_color), 0.454545f), 0.f, 1.f);
-
+   const float3 tone_mapped_color = clamp(powr(max(0.f, my_albedo * accumulated_color), 0.454545f), 0.f, 1.f);
    store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
 }
 
@@ -1036,28 +1075,34 @@ __kernel void taa(
       const __global float* restrict new_frame,
       __global float* restrict result_frame,
       const __global float* restrict prev_frame,
-      const int frame_number){
+      const int frame_number
+)
+{
+   	// CUDA equivalent:
+	// get_global_id(0) <=> blockIdx.x * blockDim.x + threadIdx.x
+	// get_global_id(1) <=> blockIdx.y * blockDim.y + threadIdx.y
+	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
+	const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
+   
+	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+		return;
 
-   // Return if out of image
-   const int2 pixel = (int2){get_global_id(0), get_global_id(1)};
-   const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
-   if(pixel.x >= IMAGE_WIDTH || pixel.y >=  IMAGE_HEIGHT)
-      return;
+	// Linear pixel index
+	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
 
    float3 my_new_color = load_float3(new_frame, linear_pixel);
 
    // Loads value which tells where this pixel was in the previous frame.
    // The value is already calculated in accumulate_noisy_data
-   const float2 prev_frame_pixel_f =
-      in_prev_frame_pixel[linear_pixel];
-   int2 prev_frame_pixel = convert_int2_rtn(prev_frame_pixel_f);
+   const float2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+   int2 prev_frame_pixel_i = convert_int2_rtn(prev_frame_pixel_f);
 
    //!!!!!!
    // Add "|| true" to debug other kernels (removes taa)
    // Return if all sampled pixels are going to be out of image area
    if(frame_number == 0 ||
-      prev_frame_pixel.x < -1 || prev_frame_pixel.y < -1 ||
-      prev_frame_pixel.x >= IMAGE_WIDTH || prev_frame_pixel.y >= IMAGE_HEIGHT){
+      prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
+      prev_frame_pixel_i.x >= IMAGE_WIDTH || prev_frame_pixel_i.y >= IMAGE_HEIGHT){
 
       store_float3(result_frame, linear_pixel, my_new_color);
       return;
@@ -1097,38 +1142,38 @@ __kernel void taa(
    // NOTE: WI has already returned if the sampling location is complety out of image
    float3 prev_color = (float3){0.f, 0.f, 0.f};
    float total_weight = 0;
-   float2 pixel_fract = prev_frame_pixel_f - convert_float2(prev_frame_pixel);
+   float2 pixel_fract = prev_frame_pixel_f - convert_float2(prev_frame_pixel_i);
    float2 one_minus_pixel_fract = 1.f - pixel_fract;
 
-   if(prev_frame_pixel.y >= 0){
-      if(prev_frame_pixel.x >= 0){
+   if(prev_frame_pixel_i.y >= 0){
+      if(prev_frame_pixel_i.x >= 0){
          float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
          prev_color += weight *
             load_float3(prev_frame,
-               prev_frame_pixel.y * IMAGE_WIDTH + prev_frame_pixel.x);
+               prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x);
          total_weight += weight;
       }
-      if(prev_frame_pixel.x < IMAGE_WIDTH - 1){
+      if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1){
          float weight = pixel_fract.x * one_minus_pixel_fract.y;
          prev_color += weight *
             load_float3(prev_frame,
-               prev_frame_pixel.y * IMAGE_WIDTH + prev_frame_pixel.x + 1);
+               prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
          total_weight += weight;
       }
    }
-   if(prev_frame_pixel.y < IMAGE_HEIGHT - 1){
-      if(prev_frame_pixel.x >= 0){
+   if(prev_frame_pixel_i.y < IMAGE_HEIGHT - 1){
+      if(prev_frame_pixel_i.x >= 0){
          float weight = one_minus_pixel_fract.x * pixel_fract.y;
          prev_color += weight *
             load_float3(prev_frame,
-               (prev_frame_pixel.y + 1) * IMAGE_WIDTH + prev_frame_pixel.x);
+               (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x);
          total_weight += weight;
       }
-      if(prev_frame_pixel.x < IMAGE_WIDTH - 1){
+      if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1){
          float weight = pixel_fract.x * pixel_fract.y;
          prev_color += weight *
             load_float3(prev_frame,
-               (prev_frame_pixel.y + 1) * IMAGE_WIDTH + prev_frame_pixel.x + 1);
+               (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
          total_weight += weight;
       }
    }
