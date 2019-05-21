@@ -105,8 +105,7 @@ static inline void parallel_reduction_max_256(__local float * result, __local fl
 #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
 #define IN_BLOCK_INDEX (BLOCK_INDEX_Y * (HORIZONTAL_BLOCKS + 1) + BLOCK_INDEX_X)
 #define FEATURE_START (feature_buffer * BLOCK_PIXELS)
-#define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + \
-   FEATURE_START + sub_vector * 256 + id)
+#define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * 256 + id)
 
 
 #if COMPRESSED_R
@@ -161,45 +160,47 @@ static inline void store_r_mat_channel(__local float3* r_mat, const int x, const
 // Random generator from here http://asgerhoedt.dk/?p=323
 static inline float random(unsigned int a)
 {
-   a = (a+0x7ed55d16) + (a<<12);
-   a = (a^0xc761c23c) ^ (a>>19);
-   a = (a+0x165667b1) + (a<<5);
-   a = (a+0xd3a2646c) ^ (a<<9);
-   a = (a+0xfd7046c5) + (a<<3);
-   a = (a^0xb55a4f09) ^ (a>>16);
+	a = (a+0x7ed55d16) + (a<<12);
+	a = (a^0xc761c23c) ^ (a>>19);
+	a = (a+0x165667b1) + (a<<5);
+	a = (a+0xd3a2646c) ^ (a<<9);
+	a = (a+0xfd7046c5) + (a<<3);
+	a = (a^0xb55a4f09) ^ (a>>16);
 
-   return convert_float(a) / convert_float(UINT_MAX);
+	return convert_float(a) / convert_float(UINT_MAX);
 }
 
 static inline float add_random(
-      const float value,
-      const int id,
-      const int sub_vector,
-      const int feature_buffer,
-      const int frame_number
+	const float value,
+	const int id,
+	const int sub_vector,
+	const int feature_buffer,
+	const int frame_number
 )
 {
-   return value + NOISE_AMOUNT * 2.f * (random(id + sub_vector * LOCAL_SIZE +
-      feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
-      frame_number * BUFFER_COUNT * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH) - 0.5f);
+	float seed = id + sub_vector * LOCAL_SIZE + feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
+				 frame_number * BUFFER_COUNT * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH;
+	float noise01 = random(seed);
+	float signedZeroMeanNoise = 2.f * noise01 - 1.f;
+	return value + NOISE_AMOUNT * signedZeroMeanNoise;
 }
 
 float3 RGB_to_YCoCg(float3 rgb)
 {
-   return (float3){
-      dot(rgb, (float3){ 1.f, 2.f,  1.f}),
-      dot(rgb, (float3){ 2.f, 0.f, -2.f}),
-      dot(rgb, (float3){-1.f, 2.f, -1.f})
-   };
+	return (float3){
+		dot(rgb, (float3){ 1.f, 2.f,  1.f}),
+		dot(rgb, (float3){ 2.f, 0.f, -2.f}),
+		dot(rgb, (float3){-1.f, 2.f, -1.f})
+	};
 }
 
 float3 YCoCg_to_RGB(float3 YCoCg)
 {
-   return (float3){
-      dot(YCoCg, (float3){0.25f,  0.25f, -0.25f}),
-      dot(YCoCg, (float3){0.25f,    0.f,  0.25f}),
-      dot(YCoCg, (float3){0.25f, -0.25f, -0.25f})
-   };
+	return (float3){
+		dot(YCoCg, (float3){0.25f,  0.25f, -0.25f}),
+		dot(YCoCg, (float3){0.25f,    0.f,  0.25f}),
+		dot(YCoCg, (float3){0.25f, -0.25f, -0.25f})
+	};
 }
 
 static inline float scale(float value, float min, float max)
@@ -223,26 +224,26 @@ static inline float Scale01(float value, float min, float max)
 // NOTE: The mirroring duplicate borders: 3 2 1 0 | 0 1 2 3 | 3 2 1 0
 static inline int mirror(int index, int size)
 {
-   if(index < 0)
-      index = abs(index) - 1;
-   else if(index >= size)
-      index = 2 * size - index - 1;
+	if(index < 0)
+		index = abs(index) - 1;
+	else if(index >= size)
+		index = 2 * size - index - 1;
 
-   return index;
+	return index;
 }
 
 static inline int2 mirror2(int2 index, int2 size)
 {
-   index.x = mirror(index.x, size.x);
-   index.y = mirror(index.y, size.y);
-   return index;
+	index.x = mirror(index.x, size.x);
+	index.y = mirror(index.y, size.y);
+	return index;
 }
 
 static inline void store_float3(__global float* restrict buffer, const int index, const float3 value)
 {
-   buffer[index * 3 + 0] = value.x;
-   buffer[index * 3 + 1] = value.y;
-   buffer[index * 3 + 2] = value.z;
+	buffer[index * 3 + 0] = value.x;
+	buffer[index * 3 + 1] = value.y;
+	buffer[index * 3 + 2] = value.z;
 }
 
 // This is significantly slower the the inline function on Vega FE
@@ -252,7 +253,7 @@ static inline void store_float3(__global float* restrict buffer, const int index
 //   buffer[(index) * 3 + 2] = value.z;
 
 #define load_float3(buffer, index) ((float3)\
-   {buffer[(index) * 3], buffer[(index) * 3 + 1], buffer[(index) * 3 + 2]})
+	{buffer[(index) * 3], buffer[(index) * 3 + 1], buffer[(index) * 3 + 2]})
 
 // This gives on Vega FE warning about breaking the restrict keyword of the kernel
 //static inline float3 load_float3(
@@ -278,24 +279,25 @@ static inline void store_float3(__global float* restrict buffer, const int index
 
 #endif
 
+// TODO: try to cycle through all offsets using Bayer matrix
 #define BLOCK_OFFSETS_COUNT 16
 __constant int2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
-   (int2){ -14, -14 },
-   (int2){   4,  -6 },
-   (int2){  -8,  14 },
-   (int2){   8,   0 },
-   (int2){ -10,  -8 },
-   (int2){   2,  12 },
-   (int2){  12, -12 },
-   (int2){ -10,   0 },
-   (int2){  12,  14 },
-   (int2){  -8, -16 },
-   (int2){   6,   6 },
-   (int2){  -2,  -2 },
-   (int2){   6, -14 },
-   (int2){ -16,  12 },
-   (int2){  14,  -4 },
-   (int2){  -6,   4 }
+	(int2){ -14, -14 },
+	(int2){   4,  -6 },
+	(int2){  -8,  14 },
+	(int2){   8,   0 },
+	(int2){ -10,  -8 },
+	(int2){   2,  12 },
+	(int2){  12, -12 },
+	(int2){ -10,   0 },
+	(int2){  12,  14 },
+	(int2){  -8, -16 },
+	(int2){   6,   6 },
+	(int2){  -2,  -2 },
+	(int2){   6, -14 },
+	(int2){ -16,  12 },
+	(int2){  14,  -4 },
+	(int2){  -6,   4 }
 };
 
 // TODO: make two versions of accumulate_noisy_data kernel: one for frame 0 and another for the rest (avoid branch)
@@ -587,7 +589,7 @@ __kernel void accumulate_noisy_data(
 __attribute__((reqd_work_group_size(256, 1, 1)))
 #endif
 __kernel void fitter(
-	__local  float*  pr_data_256,						// [local] Shared memory used to perform parrallel reduction (max, min, sum)
+	__local  float*  pr_data_256,					// [local] Shared memory used to perform parrallel reduction (max, min, sum)
 	__local  float*  u_vec,							// [local] Shared memory used to store the 'u' vectors
 	__local  float3* r_mat,							// [local] Shared memory used to store the R matrix of the QR factorization
 	__global float* restrict weights,				// [out]   Features weights
@@ -716,7 +718,7 @@ __kernel void fitter(
 		parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
-		// initially wanted col_limited is used to select wich WI runs which branch
+		// initially wanted col_limited is used to select wich work-item runs which branch
 		// it is slower. However using col produces the same result.
 		float r_value;
 		if(id < col)
@@ -753,7 +755,7 @@ __kernel void fitter(
 		{
 			// Starts by computing dot product with reduction sum function
 			#if CACHE_TMP_DATA
-			// No need to load tmp_data twice because each WI first copies value for
+			// No need to load tmp_data twice because each work-item first copies value for
 			// dot product computation and then modifies the same value
 			float tmp_data_private_cache[(BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH) / LOCAL_SIZE];
 			#endif
@@ -883,7 +885,7 @@ __kernel void fitter(
 __kernel void weighted_sum(
 	const __global float* restrict weights,				// [in]	 Features weights computed by the fitter kernel
 	const __global float* restrict mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  __global float* restrict output,				// [out] Output color (estimate of the noise free color)
+		  __global float* restrict output,				// [out] Noise-free color estimate
 	const __global float* restrict current_normals,		// [in]  Current (world) normals
 	const __global float* restrict current_positions,	// [in]  Current world positions
 	const __global float* restrict current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
@@ -956,10 +958,10 @@ __kernel void accumulate_filtered_data(
 	const __global float2* restrict in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
 	const __global unsigned char* restrict accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
 	const __global float* restrict albedo,					// [in]  Albedo buffer of the current frame (non-noisy)
-		  __global float* restrict tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color
+		  __global float* restrict tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
 	const __global unsigned char* restrict current_spp,		// [in]	 Current number of samples accumulated (for CMA)
-	const __global float* restrict accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated estimate 
-		  __global float* restrict accumulated_frame,		// [out] Current frame noise-free accumulated estimate
+	const __global float* restrict accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  __global float* restrict accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
 	const int frame_number									// [in]  Current frame number
 )
 {
@@ -1070,12 +1072,15 @@ __kernel void accumulate_filtered_data(
 }
 
 
+// TODO:
+// - make two versions of the kernel: one for the frame 0 and one for the rest
+// - optimize with local/shared memory
 __kernel void taa(
-      const __global float2* restrict in_prev_frame_pixel,
-      const __global float* restrict new_frame,
-      __global float* restrict result_frame,
-      const __global float* restrict prev_frame,
-      const int frame_number
+	const __global float2* restrict in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const __global float* restrict new_frame,				// [in]	 Current frame color buffer
+		  __global float* restrict result_frame,			// [out] Antialiased frame color buffer
+	const __global float* restrict prev_frame,				// [in]  Previous frame color buffer
+	const int frame_number									// [in]  Current frame number
 )
 {
    	// CUDA equivalent:
@@ -1090,104 +1095,108 @@ __kernel void taa(
 	// Linear pixel index
 	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
 
-   float3 my_new_color = load_float3(new_frame, linear_pixel);
+	// Current frame color
+	float3 my_new_color = load_float3(new_frame, linear_pixel);
 
-   // Loads value which tells where this pixel was in the previous frame.
-   // The value is already calculated in accumulate_noisy_data
-   const float2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
-   int2 prev_frame_pixel_i = convert_int2_rtn(prev_frame_pixel_f);
+	// Previous frame pixel coordinates
+	const float2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+	int2 prev_frame_pixel_i = convert_int2_rtn(prev_frame_pixel_f);
 
-   //!!!!!!
-   // Add "|| true" to debug other kernels (removes taa)
-   // Return if all sampled pixels are going to be out of image area
-   if(frame_number == 0 ||
-      prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
-      prev_frame_pixel_i.x >= IMAGE_WIDTH || prev_frame_pixel_i.y >= IMAGE_HEIGHT){
+	//!!!!!!
+	// Add "|| true" to debug other kernels (removes taa)
+	// Return if all sampled pixels are going to be out of image area
+	if(frame_number == 0 ||
+		prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
+		prev_frame_pixel_i.x >= IMAGE_WIDTH || prev_frame_pixel_i.y >= IMAGE_HEIGHT
+	)
+	{
+		store_float3(result_frame, linear_pixel, my_new_color);
+		return;
+	}
 
-      store_float3(result_frame, linear_pixel, my_new_color);
-      return;
-   }
+	// Compute the color AABB in the 3x3 neighbourhood and the min/max in a cross pattern around the current pixel
+	float3 minimum_box = INFINITY;
+	float3 minimum_cross = INFINITY;
+	float3 maximum_box = -INFINITY;
+	float3 maximum_cross = -INFINITY;
+	for(int y = -1; y <= 1; ++y)
+	{
+		for(int x = -1; x <= 1; ++x)
+		{
+			int2 sample_location = pixel + (int2){x, y};
+			if(sample_location.x >= 0 && sample_location.y >= 0 &&
+			   sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT
+			)
+			{
+				float3 sample_color;
+				if(x == 0 && y == 0)
+					sample_color = my_new_color;
+				else
+					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * IMAGE_WIDTH);
 
+				sample_color = RGB_to_YCoCg(sample_color);
 
-   float3 minimum_box = INFINITY;
-   float3 minimum_cross = INFINITY;
-   float3 maximum_box = -INFINITY;
-   float3 maximum_cross = -INFINITY;
-   for(int y = -1; y < 2; ++y){
-      for(int x = -1; x < 2; ++x){
-         int2 sample_location = pixel + (int2){x, y};
-         if(sample_location.x >= 0 && sample_location.y >= 0 &&
-            sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT){
+				if(x == 0 || y == 0)
+				{
+					minimum_cross = fmin(minimum_cross, sample_color);
+					maximum_cross = fmax(maximum_cross, sample_color);
+				}
 
-            float3 sample_color;
-            if(x == 0 && y == 0)
-               sample_color = my_new_color;
-            else
-               sample_color = load_float3(
-                  new_frame, sample_location.x + sample_location.y * IMAGE_WIDTH);
+				minimum_box = fmin(minimum_box, sample_color);
+				maximum_box = fmax(maximum_box, sample_color);
+			}
+		}
+	}
 
-            sample_color = RGB_to_YCoCg(sample_color);
+	// Bilinear sampling of previous frame.
+	// Note: work-item has already returned if the sampling location is completly out of image
+	float3 prev_color = (float3){0.f, 0.f, 0.f};
+	float total_weight = 0;
+	float2 pixel_fract = prev_frame_pixel_f - convert_float2(prev_frame_pixel_i);
+	float2 one_minus_pixel_fract = 1.f - pixel_fract;
 
-            if(x == 0 || y == 0){
-               minimum_cross = fmin(minimum_cross, sample_color);
-               maximum_cross = fmax(maximum_cross, sample_color);
-            }
-            minimum_box = fmin(minimum_box, sample_color);
-            maximum_box = fmax(maximum_box, sample_color);
-         }
-      }
-   }
+	if(prev_frame_pixel_i.y >= 0)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
 
-   // Bilinear sampling of previous frame.
-   // NOTE: WI has already returned if the sampling location is complety out of image
-   float3 prev_color = (float3){0.f, 0.f, 0.f};
-   float total_weight = 0;
-   float2 pixel_fract = prev_frame_pixel_f - convert_float2(prev_frame_pixel_i);
-   float2 one_minus_pixel_fract = 1.f - pixel_fract;
+		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		{
+			float weight = pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
 
-   if(prev_frame_pixel_i.y >= 0){
-      if(prev_frame_pixel_i.x >= 0){
-         float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
-         prev_color += weight *
-            load_float3(prev_frame,
-               prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x);
-         total_weight += weight;
-      }
-      if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1){
-         float weight = pixel_fract.x * one_minus_pixel_fract.y;
-         prev_color += weight *
-            load_float3(prev_frame,
-               prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
-         total_weight += weight;
-      }
-   }
-   if(prev_frame_pixel_i.y < IMAGE_HEIGHT - 1){
-      if(prev_frame_pixel_i.x >= 0){
-         float weight = one_minus_pixel_fract.x * pixel_fract.y;
-         prev_color += weight *
-            load_float3(prev_frame,
-               (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x);
-         total_weight += weight;
-      }
-      if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1){
-         float weight = pixel_fract.x * pixel_fract.y;
-         prev_color += weight *
-            load_float3(prev_frame,
-               (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
-         total_weight += weight;
-      }
-   }
+	if(prev_frame_pixel_i.y < IMAGE_HEIGHT - 1)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
 
-   prev_color /= total_weight; // Total weight can be less than one on the edges
-   float3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
+		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		{
+			float weight = pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
 
-   // NOTE: Some references use more complicated methods to move the previous frame color
-   // to the YCoCg space AABB
-   float3 minimum = (minimum_box + minimum_cross) / 2.f;
-   float3 maximum = (maximum_box + maximum_cross) / 2.f;
-   float3 prev_color_rgb = YCoCg_to_RGB(clamp(prev_color_ycocg, minimum, maximum));
+	prev_color /= total_weight; // Total weight can be less than one on the edges
+	float3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
 
-   float3 result_color = TAA_BLEND_ALPHA * my_new_color +
-      (1.f - TAA_BLEND_ALPHA) * prev_color_rgb;
-   store_float3(result_frame, linear_pixel, result_color);
+	// Note: Some references use more complicated methods to move the previous frame color to the YCoCg space AABB
+	float3 minimum = (minimum_box + minimum_cross) / 2.f;
+	float3 maximum = (maximum_box + maximum_cross) / 2.f;
+	float3 prev_color_rgb = YCoCg_to_RGB(clamp(prev_color_ycocg, minimum, maximum));
+
+	float3 result_color = TAA_BLEND_ALPHA * my_new_color + (1.f - TAA_BLEND_ALPHA) * prev_color_rgb; // Lerp(prev_color_rgb, my_new_color, TAA_BLEND_ALPHA);
+	store_float3(result_frame, linear_pixel, result_color);
 }

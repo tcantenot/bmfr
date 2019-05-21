@@ -57,10 +57,12 @@
 // ### Edit these defines if you want to experiment different parameters ###
 // The amount of noise added to feature buffers to cancel sigularities
 #define NOISE_AMOUNT 1e-2
+
 // The amount of new frame used in accumulated frame (1.f would mean no accumulation).
 #define BLEND_ALPHA 0.2f
 #define SECOND_BLEND_ALPHA 0.1f
 #define TAA_BLEND_ALPHA 0.2f
+
 // NOTE: if you want to use other than normal and world_position data you have to make
 // it available in the first accumulation kernel and in the weighted sum kernel
 #define NOT_SCALED_FEATURE_BUFFERS \
@@ -81,16 +83,20 @@
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated
 #define COMPRESSED_R 1
+
 // If 1 stores tmp_data to private memory when it is loaded for dot product calculation
 #define CACHE_TMP_DATA 1
+
 // If 1 features_data buffer is in half precision for faster load and store.
 // NOTE: if world position values are greater than 256 this cannot be used because
 // 256*256 is infinity in half-precision
 #define USE_HALF_PRECISION_IN_FEATURES_DATA 1
+
 // If 1 adds __attribute__((reqd_work_group_size(256, 1, 1))) to fitter and
 // accumulate_noisy_data kernels. With some codes, attribute made the kernels faster and
 // with some it slowed them down.
 #define ADD_REQD_WG_SIZE 1
+
 // These local sizes are used with 2D kernels which do not require spesific local size
 // (Global sizes are always a multiple of 32)
 #define LOCAL_WIDTH 8
@@ -99,23 +105,44 @@
 // Fastest on Nvidia Titan Xp was (LOCAL_WIDTH = 32, LOCAL_HEIGHT = 1)
 
 
-
 // ### Do not edit defines after this line unless you know what you are doing ###
 // For example, other than 32x32 blocks are not supported
 #define BLOCK_EDGE_LENGTH 32
+
 #define BLOCK_PIXELS (BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH)
+
 // Rounds image sizes up to next multiple of BLOCK_EDGE_LENGTH
-#define WORKSET_WIDTH (BLOCK_EDGE_LENGTH * \
-   ((IMAGE_WIDTH + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-#define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * \
-   ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-#define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
-#define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
+#define WORKSET_WIDTH  (BLOCK_EDGE_LENGTH * ((IMAGE_WIDTH  + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
+#define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
+
+// TODO: not sure that the buffers must be OUTPUT_SIZE: IMAGE_WITDH * IMAGE_HEIGHT should be enough
 #define OUTPUT_SIZE (WORKSET_WIDTH * WORKSET_HEIGHT)
 
 // 256 is the maximum local size on AMD GCN
 // Synchronization within 32x32=1024 block requires unrolling four times
 #define LOCAL_SIZE 256
+
+// We need a margin of one block (BLOCK_EDGE_LENGTH) because we are offsetting the blocks
+// at most one block to the left or the right to avoid blocky artifacts.
+// So most of the time, we have 2 partially filled blocks and BLOCK_COUNT_X-1 full blocks on one row
+
+// Example: image of 8x12 with blocks of 4x1
+
+// No offset: 2x3 = 6 blocks
+// |....|....|
+// |....|....|
+// |....|....|
+
+// With some offset (here (-2, 0)): 3x3 = 9 blocks
+// |--..|....|..--|
+// |--..|....|..--|
+// |--..|....|..--|
+
+// Workset with margin width
+#define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
+
+// Workset with margin height
+#define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
 
 // Number of blocks in X dim in the workset with margin
 #define WORKSET_WITH_MARGIN_BLOCK_COUNT_X (WORKSET_WITH_MARGINS_WIDTH  / BLOCK_EDGE_LENGTH)
@@ -126,7 +153,8 @@
 // Number of block in the workset with margin
 #define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
 
-#define FITTER_GLOBAL (LOCAL_SIZE * WORKSET_WITH_MARGIN_BLOCK_COUNT)
+// Fitter kernel global range
+#define FITTER_KERNEL_GLOBAL_RANGE (LOCAL_SIZE * WORKSET_WITH_MARGIN_BLOCK_COUNT)
 
 // Creates two same buffers and swap() call can be used to change which one is considered
 // current and which one previous
@@ -250,7 +278,7 @@ int tasks()
     cl::NDRange accum_global(WORKSET_WITH_MARGINS_WIDTH, WORKSET_WITH_MARGINS_HEIGHT);
     cl::NDRange output_global(WORKSET_WIDTH, WORKSET_HEIGHT);
     cl::NDRange local(LOCAL_WIDTH, LOCAL_HEIGHT);
-    cl::NDRange fitter_global(FITTER_GLOBAL);
+    cl::NDRange fitter_global(FITTER_KERNEL_GLOBAL_RANGE);
     cl::NDRange fitter_local(LOCAL_SIZE);
 
     // Load input data arrays from disk to host memory
@@ -318,28 +346,63 @@ int tasks()
     }
 
     // Create OpenCL buffers
+
+	// (World) normals buffers (3 * float32) in [-1, +1]^3
+	// TODO: compress data? half? -> would require different storage than feature buffer
     Double_buffer<cl::Buffer> normals_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// World positions buffer (3 * float32)
+	// TODO: normalize in [0, 1]
     Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> noisy_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    
+	// Noisy 1spp color buffer (3 * float32)
+	Double_buffer<cl::Buffer> noisy_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
 
+	// Features buffer size
     size_t in_buffer_data_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
-    cl::Buffer in_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * in_buffer_data_size, nullptr);
-    cl::Buffer filtered_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> out_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
-    Double_buffer<cl::Buffer> result_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-    cl::Buffer prev_pixels_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2));
-    cl::Buffer accept_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar));
-    cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
-    cl::Buffer tone_mapped_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
-    cl::Buffer weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_GLOBAL / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
-    cl::Buffer mins_maxs_buffer(context, CL_MEM_READ_WRITE, (FITTER_GLOBAL / 256) * 6 * sizeof(cl_float2));
 
-	// Number of samples accumulated (for cumulative moving average)
+	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
+    cl::Buffer in_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * in_buffer_data_size, nullptr);
+
+	// Noise-free color estimate (3 * float32)
+    cl::Buffer filtered_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// Noise-free accumulated color estimate (3 * float32)
+    Double_buffer<cl::Buffer> out_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
+
+	// Final antialised color buffer (3 * float32)
+    Double_buffer<cl::Buffer> result_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// Previous frame pixel coordinates (after reprojection) (2 * float32)
+    cl::Buffer prev_pixels_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2));
+
+	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
+    cl::Buffer accept_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar));
+
+	// Albedo buffer (3 * float32) // TODO: compress this
+    cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
+
+	// Tonemapped noise-free color estimate (3 * float32)
+    cl::Buffer tone_mapped_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
+
+	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
+    cl::Buffer weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
+
+	// Min and max of features values per block (world_positions) (6 * float32)
+    cl::Buffer mins_maxs_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * 6 * sizeof(cl_float2));
+
+	// Number of samples accumulated (for cumulative moving average) (char 8bits)
     Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_char));
 
-    std::vector<Double_buffer<cl::Buffer> *> all_double_buffers = {
-        &normals_buffer, &positions_buffer, &noisy_buffer,
-        &out_buffer, &result_buffer, &spp_buffer};
+	std::vector<Double_buffer<cl::Buffer> *> all_double_buffers =
+	{
+		&normals_buffer,
+		&positions_buffer,
+		&noisy_buffer,
+		&out_buffer,
+		&result_buffer,
+		&spp_buffer
+	};
 
     // Set kernel arguments
     int arg_index = 0;
@@ -347,9 +410,9 @@ int tasks()
     accum_noisy_kernel.setArg(arg_index++, accept_buffer);		// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
     arg_index = 0;
-#if COMPRESSED_R
-
-	// TODO: replace buffer_count-2
+	
+	#if COMPRESSED_R
+	// TODO: replace 'buffer_count-2'
 	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy color channels.
 	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input.
 	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
@@ -357,13 +420,11 @@ int tasks()
 
 	// Computed via sum of arithmetic sequence (that for the upper right triangle):
 	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
-    const auto r_size = ((buffer_count - 2) *
-                        (buffer_count - 1) / 2) *
-                        sizeof(cl_float3);
-#else
-    const auto r_size = (buffer_count - 2) *
-                        (buffer_count - 2) * sizeof(cl_float3);
-#endif
+    const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
+	#else
+    const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(cl_float3);
+	#endif
+
 	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
 	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
     fitter_kernel.setArg(arg_index++, LOCAL_SIZE * sizeof(float), nullptr);		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
@@ -375,18 +436,18 @@ int tasks()
     arg_index = 0;
     weighted_sum_kernel.setArg(arg_index++, weights_buffer);	// [in]	 Features weights computed by the fitter kernel
     weighted_sum_kernel.setArg(arg_index++, mins_maxs_buffer);  // [in]  Min and max of features values per block (world_positions)
-    weighted_sum_kernel.setArg(arg_index++, filtered_buffer);	// [out] Output color (estimate of the noise free color)
+    weighted_sum_kernel.setArg(arg_index++, filtered_buffer);	// [out] Noise-free color estimate
 
     arg_index = 0;
     accum_filtered_kernel.setArg(arg_index++, filtered_buffer);		// [in]  Noise free color estimate (computed as the weighted sum of the features)
     accum_filtered_kernel.setArg(arg_index++, prev_pixels_buffer);	// [in]  Previous frame pixel coordinates (after reprojection)
     accum_filtered_kernel.setArg(arg_index++, accept_buffer);		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
     accum_filtered_kernel.setArg(arg_index++, albedo_buffer);		// [in]  Albedo buffer of the current frame (non-noisy)
-    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);	// [out] Accumulated and tonemapped noise-free color
+    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);	// [out] Accumulated and tonemapped noise-free color estimate
 
     arg_index = 0;
-    taa_kernel.setArg(arg_index++, prev_pixels_buffer);
-    taa_kernel.setArg(arg_index++, tone_mapped_buffer);
+    taa_kernel.setArg(arg_index++, prev_pixels_buffer);				// [in] Previous frame pixel coordinates (after reprojection)
+    taa_kernel.setArg(arg_index++, tone_mapped_buffer);				// [in]	Current frame color buffer
     queue.finish();
 
     std::vector<clutils::GPUTimer<std::milli>> accum_noisy_timer;
@@ -411,6 +472,13 @@ int tasks()
     clutils::ProfilingInfo<FRAME_COUNT - 1> profile_info_total("Total time in all kernels (including intermediate launch overheads)");
 
     printf("Run and profile kernels.\n");
+
+	// Note: enqueueNDRangeKernel takes in the global_size and the local_size.
+	// In CUDA, a dispatch takes in the grid_size and the block_size.
+	// The correspondance is as follow:
+	//	global_size = grid_size * block_size
+	//	local_size = block_size
+
     // Note: in real use case there would not be WriteBuffer and ReadBuffer function calls
     // because the input data comes from the path tracer and output goes to the screen
     for(int frame = 0; frame < FRAME_COUNT; ++frame)
@@ -464,16 +532,16 @@ int tasks()
 		// -> accumulate noise-free color estimate + output a tonemapped version
         arg_index = 5;
         accum_filtered_kernel.setArg(arg_index++, *spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
-        accum_filtered_kernel.setArg(arg_index++, *out_buffer.previous());	// [in]  Previous frame noise-free accumulated estimate 
-        accum_filtered_kernel.setArg(arg_index++, *out_buffer.current());	// [out] Current frame noise-free accumulated estimate
+        accum_filtered_kernel.setArg(arg_index++, *out_buffer.previous());	// [in]  Previous frame noise-free accumulated color estimate 
+        accum_filtered_kernel.setArg(arg_index++, *out_buffer.current());	// [out] Current frame noise-free accumulated color estimate
         accum_filtered_kernel.setArg(arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
         queue.enqueueNDRangeKernel(accum_filtered_kernel, cl::NullRange, output_global, local, nullptr, &accum_filtered_timer[matrix_index].event());
 
 		// Phase III: Temporal antialiasing
         arg_index = 2;
-        taa_kernel.setArg(arg_index++, *result_buffer.current());
-        taa_kernel.setArg(arg_index++, *result_buffer.previous());
-        taa_kernel.setArg(arg_index++, sizeof(cl_int), &frame);
+        taa_kernel.setArg(arg_index++, *result_buffer.current());	// [out] Antialiased frame color buffer
+        taa_kernel.setArg(arg_index++, *result_buffer.previous());	// [in]  Previous frame color buffer
+        taa_kernel.setArg(arg_index++, sizeof(cl_int), &frame);		// [in]  Current frame number
         queue.enqueueNDRangeKernel(taa_kernel, cl::NullRange, output_global, local, nullptr, &taa_timer[matrix_index].event());
 
         // This is not timed because in real use case the result is stored to frame buffer
