@@ -112,6 +112,7 @@
 #define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
 #define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
 #define OUTPUT_SIZE (WORKSET_WIDTH * WORKSET_HEIGHT)
+
 // 256 is the maximum local size on AMD GCN
 // Synchronization within 32x32=1024 block requires unrolling four times
 #define LOCAL_SIZE 256
@@ -197,11 +198,11 @@ int tasks()
 
     std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
     std::string features_scaled(SCALED_FEATURE_BUFFERS);
-    const int features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
+    const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
     // + 1 because last one does not have ',' after it.
-    const int features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
+    const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
     // + 3 stands for three noisy spp color channels.
-    const int buffer_count = features_not_scaled_count + features_scaled_count + 3;
+    const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
     // Create and build the kernel
     std::stringstream build_options;
@@ -347,19 +348,28 @@ int tasks()
 
     arg_index = 0;
 #if COMPRESSED_R
-    const int r_size = ((buffer_count - 2) *
+
+	// TODO: replace buffer_count-2
+	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy color channels.
+	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input.
+	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
+	// See section 3.3 and 3.4.
+
+	// Computed via sum of arithmetic sequence (that for the upper right triangle):
+	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
+    const auto r_size = ((buffer_count - 2) *
                         (buffer_count - 1) / 2) *
-                       sizeof(cl_float3);
+                        sizeof(cl_float3);
 #else
-    const int r_size = (buffer_count - 2) *
-                       (buffer_count - 2) * sizeof(cl_float3);
+    const auto r_size = (buffer_count - 2) *
+                        (buffer_count - 2) * sizeof(cl_float3);
 #endif
 	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
 	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
     fitter_kernel.setArg(arg_index++, LOCAL_SIZE * sizeof(float), nullptr);		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
-    fitter_kernel.setArg(arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);
-    fitter_kernel.setArg(arg_index++, r_size, nullptr);
-    fitter_kernel.setArg(arg_index++, weights_buffer);
+    fitter_kernel.setArg(arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);	// [local] Shared memory used to store the 'u' vectors
+    fitter_kernel.setArg(arg_index++, r_size, nullptr);							// [local] Shared memory used to store the R matrix of the QR factorization
+    fitter_kernel.setArg(arg_index++, weights_buffer);							// [out]   Features weights
     fitter_kernel.setArg(arg_index++, mins_maxs_buffer);						// [out]   Min and max of features values per block
 
     arg_index = 0;

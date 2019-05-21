@@ -575,29 +575,31 @@ __kernel void accumulate_noisy_data(
 // --> avoid output min/max that is used to scale the scaled features in the kernel "weighted_sum"
 //	   (there seems to be double scaling: once in fitter and once weighted_sum...)
 
+// Note: The __local or local address space name is used to describe variables that need to be allocated in local memory
+// and are shared by all work-items of a work-group. (https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/local.html)
+
 #if ADD_REQD_WG_SIZE
 __attribute__((reqd_work_group_size(256, 1, 1)))
 #endif
 __kernel void fitter(
 	__local float *pr_data_256,						// [local] Shared memory used to perform parrallel reduction (max, min, sum)
-	__local float *u_vec,
-	__local float3 *r_mat,
-	__global float* restrict weights,
+	__local float *u_vec,							// [local] Shared memory used to store the 'u' vectors
+	__local float3 *r_mat,							// [local] Shared memory used to store the R matrix of the QR factorization
+	__global float* restrict weights,				// [out]   Features weights
 	__global float* restrict mins_maxs,				// [out]   Min and max of features values per block
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	__global half* restrict tmp_data,
+	__global half* restrict tmp_data,				// [out]   Features buffer (half-precision)
 	#else
-	__global float* restrict tmp_data,
+	__global float* restrict tmp_data,				// [out]   Features buffer (single-precision)
 	#endif
-	const int frame_number
+	const int frame_number							// Current frame number
 )
 {
-	__local float u_length_squared;
-	__local float dot;
-	__local float block_min; // Local variable that will hold the result of the parallel min reduction
-	__local float block_max; // Local variable that will hold the result of the parallel max reduction
-	__local float vec_length;
-	float prod = 0.0f;
+	__local float u_length_squared;					// Local variable (i.e shared across threads in group) that holds the 'u' vector square length
+	__local float dot;								// Local variable (i.e shared across threads in group) that holds the 
+	__local float block_min;						// Local variable (i.e shared across threads in group) that holds the result of the parallel min reduction
+	__local float block_max;						// Local variable (i.e shared across threads in group) that holds the result of the parallel max reduction
+	__local float vec_length;			
 
 	const int group_id = get_group_id(0); // = blockIdx.x
 	const int id = get_local_id(0); // = threadIdx.x in [0, 255]
@@ -620,7 +622,7 @@ __kernel void fitter(
 		// #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
 		// #define IN_BLOCK_INDEX (BLOCK_INDEX_Y * (HORIZONTAL_BLOCKS + 1) + BLOCK_INDEX_X)
 		// #define FEATURE_START (feature_buffer * BLOCK_PIXELS)
-		// #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * 256 + id)
+		// #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * LOCAL_SIZE + id)
 
 		// Manual unrolling for parallel reduction as the block contains 1024 (32x32) work items and
 		// the reduction operates on 256 elements (group size)
@@ -658,164 +660,218 @@ __kernel void fitter(
 			float scaled_value = scale(LOAD(tmp_data, IN_ACCESS), block_min, block_max);
 			STORE(tmp_data, IN_ACCESS, scaled_value);
 		}
-   }
+	}
 
-   // Non square matrices require processing every column. Otherwise result is
-   // OKish, but R is not upper triangular matrix
-   int limit = buffers == BLOCK_PIXELS ? buffers - 1 : buffers;
+	// Non square matrices require processing every column. Otherwise result is
+	// OKish, but R is not upper triangular matrix
+	int limit = buffers == BLOCK_PIXELS ? buffers - 1 : buffers;
 
-   // Compute R
-   for(int col = 0; col < limit; col++) {
-      int col_limited = min(col, buffers - 3);
+	// Compute R
+	for(int col = 0; col < limit; col++)
+	{
+		// Note: the last 3 features values are the 3 channels of the color (not used for the regression)
+		int col_limited = min(col, buffers - 3);
 
-      // Load new column into memory
-      int feature_buffer = col;
-      float tmp_sum_value = 0.f;
-      for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector){
-         float tmp = LOAD(tmp_data, IN_ACCESS);
+		// Load new column into memory
+		int feature_buffer = col;
+		float tmp_sum_value = 0.f;
 
-         const int index = id + sub_vector * LOCAL_SIZE;
-         u_vec[index] = tmp;
-         if(index >= col_limited + 1){
-            tmp_sum_value += tmp * tmp;
-         }
-      }
-      barrier(CLK_LOCAL_MEM_FENCE);
+		// LOCAL_SIZE = size of the shared memory (= 256)
+		// BLOCK_PIXELS = number of pixels in a block (32x32 = 1024)
 
-      // Find length of vector in A's column with reduction sum function
-      pr_data_256[id] = tmp_sum_value;
-      barrier(CLK_LOCAL_MEM_FENCE);
-      parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
+		// #define HORIZONTAL_BLOCKS (WORKSET_WIDTH / BLOCK_EDGE_LENGTH)
+		// #define BLOCK_INDEX_X (group_id % (HORIZONTAL_BLOCKS + 1))
+		// #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
+		// #define IN_BLOCK_INDEX (BLOCK_INDEX_Y * (HORIZONTAL_BLOCKS + 1) + BLOCK_INDEX_X)
+		// #define FEATURE_START (feature_buffer * BLOCK_PIXELS)
+		// #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * LOCAL_SIZE + id)
 
-      // NOTE: GCN Opencl compiler can do some optimization with this because if
-      // initially wanted col_limited is used to select wich WI runs which branch
-      // it is slower. However using col produces the same result.
-      float r_value;
-      if(id < col){
+		// Manual unrolling for parallel reduction as the block contains 1024 (32x32) work items and
+		// the reduction operates on 256 elements (group size)
+		// -> Compute the sum of N values (N = 1024/256 = 4)
+		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
+		{
+			// Load feature
+			float tmp = LOAD(tmp_data, IN_ACCESS);
 
-         // Copy u_vec value
-         r_value = u_vec[id];
+			// Store the feature in shared memory
+			const int index = id + sub_vector * LOCAL_SIZE;
+			u_vec[index] = tmp;
 
-      }else if(id == col){
+			if(index >= col_limited + 1)
+			{
+				tmp_sum_value += tmp * tmp;
+			}
+		}
+		SyncThreads();
 
-         u_length_squared = vec_length;
-         vec_length = sqrt(vec_length + u_vec[col_limited] * u_vec[col_limited]);
-         u_vec[col_limited] -= vec_length;
-         u_length_squared += u_vec[col_limited] * u_vec[col_limited];
-         // (u_length_squared is now updated length squared)
-         r_value = vec_length;
+		// Find length of vector in A's column with reduction sum function
+		pr_data_256[id] = tmp_sum_value;
+		SyncThreads();
+		parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
 
-      }else if(id > col){ //Could have "&& id <  R_EDGE" but this is little bit faster
+		// NOTE: GCN Opencl compiler can do some optimization with this because if
+		// initially wanted col_limited is used to select wich WI runs which branch
+		// it is slower. However using col produces the same result.
+		float r_value;
+		if(id < col)
+		{
+			// Copy u_vec value
+			r_value = u_vec[id];
 
-         // Last values on every column are zeros
-         r_value = 0.0f;
+		}
+		else if(id == col)
+		{
+			u_length_squared = vec_length;
+			vec_length = sqrt(vec_length + u_vec[col_limited] * u_vec[col_limited]);
+			u_vec[col_limited] -= vec_length;
+			u_length_squared += u_vec[col_limited] * u_vec[col_limited];
+			// (u_length_squared is now updated length squared)
+			r_value = vec_length;
 
-      }
+		}
+		else if(id > col) //Could have "&& id <  R_EDGE" but this is little bit faster
+		{
+			// Last values on every column are zeros
+			r_value = 0.0f;
+		}
 
-      int id_limited = min(id, buffers - 3);
-      if(col < buffers - 3)
-         store_r_mat_broadcast(r_mat, col_limited, id_limited, r_value);
-      else
-         store_r_mat_channel(r_mat, col_limited, id_limited, col - buffers + 3, r_value);
-      barrier(CLK_LOCAL_MEM_FENCE);
+		int id_limited = min(id, buffers - 3);
+		if(col < buffers - 3)
+			store_r_mat_broadcast(r_mat, col_limited, id_limited, r_value);
+		else
+			store_r_mat_channel(r_mat, col_limited, id_limited, col - buffers + 3, r_value);
+		SyncThreads();
 
-      // Transform further columns of A
-      // NOTE: three last columns are three color channels of noisy data. However,
-      // they all need to be transfomed as they were column indexed (buffers - 3)
-      for(int feature_buffer = col_limited+1; feature_buffer < buffers; feature_buffer++){
+		// Transform further columns of A
+		// NOTE: three last columns are three color channels of noisy data. However,
+		// they all need to be transfomed as they were column indexed (buffers - 3)
+		for(int feature_buffer = col_limited+1; feature_buffer < buffers; feature_buffer++)
+		{
+			// Starts by computing dot product with reduction sum function
+			#if CACHE_TMP_DATA
+			// No need to load tmp_data twice because each WI first copies value for
+			// dot product computation and then modifies the same value
+			float tmp_data_private_cache[(BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH) / LOCAL_SIZE];
+			#endif
 
-         // Starts by computing dot product with reduction sum function
-#if CACHE_TMP_DATA
-         // No need to load tmp_data twice because each WI first copies value for
-         // dot product computation and then modifies the same value
-         float tmp_data_private_cache[(BLOCK_EDGE_LENGTH *
-            BLOCK_EDGE_LENGTH) / LOCAL_SIZE];
-#endif
-         float tmp_sum_value = 0.f;
-         for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector){
+			float tmp_sum_value = 0.f;
+			for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
+			{
+				const int index = id + sub_vector * LOCAL_SIZE;
+				if(index >= col_limited)
+				{
+					// Load feature
+					float tmp = LOAD(tmp_data, IN_ACCESS);
 
-            const int index = id + sub_vector * LOCAL_SIZE;
-            if(index >= col_limited){
+					// Add noise on the first time values are loaded
+					// (does not add noise to constant buffer (column 0) and noisy image data (last 3 columns))
+					if(col == 0 && feature_buffer < buffers - 3)
+					{
+						tmp = add_random(tmp, id, sub_vector, feature_buffer, frame_number);
+					}
 
-               float tmp = LOAD(tmp_data, IN_ACCESS);
+					#if CACHE_TMP_DATA
+					tmp_data_private_cache[sub_vector] = tmp;
+					#endif
+					tmp_sum_value += tmp * u_vec[index];
+				}
+			}
 
-               // Add noise on the first time values are loaded
-               // (does not add noise to constant buffer and noisy image data)
-               if(col == 0 && feature_buffer < buffers - 3){
-                  tmp = add_random(tmp, id, sub_vector, feature_buffer, frame_number);
-               }
+			pr_data_256[id] = tmp_sum_value;
+			SyncThreads();
+			parallel_reduction_sum_256(&dot, pr_data_256, col_limited);
 
-#if CACHE_TMP_DATA
-               tmp_data_private_cache[sub_vector] = tmp;
-#endif
-               tmp_sum_value += tmp * u_vec[index];
-            }
-         }
+			// LOCAL_SIZE = size of the shared memory (= 256)
+			// BLOCK_PIXELS = number of pixels in a block (32x32 = 1024)
 
-         pr_data_256[id] = tmp_sum_value;
-         barrier(CLK_LOCAL_MEM_FENCE);
-         parallel_reduction_sum_256(&dot, pr_data_256, col_limited);
+			// #define HORIZONTAL_BLOCKS (WORKSET_WIDTH / BLOCK_EDGE_LENGTH)
+			// #define BLOCK_INDEX_X (group_id % (HORIZONTAL_BLOCKS + 1))
+			// #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
+			// #define IN_BLOCK_INDEX (BLOCK_INDEX_Y * (HORIZONTAL_BLOCKS + 1) + BLOCK_INDEX_X)
+			// #define FEATURE_START (feature_buffer * BLOCK_PIXELS)
+			// #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * LOCAL_SIZE + id)
 
-         for (int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector) {
-             const int index = id + sub_vector * LOCAL_SIZE;
-             if (index >= col_limited) {
-#if CACHE_TMP_DATA
-               float store_value = tmp_data_private_cache[sub_vector];
-#else
-               float store_value = LOAD(tmp_data, IN_ACCESS);
-               store_value =
-                  add_random(store_value, id, sub_vector, feature_buffer, frame_number);
-#endif
-               store_value -= 2 * u_vec[index] * dot / u_length_squared;
-               STORE(tmp_data, IN_ACCESS, store_value);
-            }
-         }
-         barrier(CLK_GLOBAL_MEM_FENCE);
-      }
-   }
+			// Manual unrolling as the block contains 1024 (32x32) work items and we operate on 256 elements (group size)
+			// -> Compute the sum of N values (N = 1024/256 = 4)
+			for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
+			{
+				const int index = id + sub_vector * LOCAL_SIZE;
+				if (index >= col_limited)
+				{
+					#if CACHE_TMP_DATA
+					float store_value = tmp_data_private_cache[sub_vector];
+					#else
+					float store_value = LOAD(tmp_data, IN_ACCESS);
+					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
+					#endif
+					store_value -= 2 * u_vec[index] * dot / u_length_squared;
+					STORE(tmp_data, IN_ACCESS, store_value);
+				}
+			}
+			SyncThreads();
+		}
+	}
 
-   // Back substitution
-   local float3 divider;
-   for(int i = R_EDGE - 2; i >= 0; i--){
-      if(id == 0)
-         divider = load_r_mat(r_mat, i, i);
-      barrier(CLK_LOCAL_MEM_FENCE);
-#if COMPRESSED_R
-      if(id < R_EDGE && id >= i){
-#else
-      // First values are always zero if R !COMPRESSED_R and
-      // "&& id >= i" makes not compressed code run little bit slower
-      if(id < R_EDGE){
-#endif
-         float3 value = load_r_mat(r_mat, id, i);
-         store_r_mat(r_mat, id, i, value / divider);
-      }
-      barrier(CLK_LOCAL_MEM_FENCE);
-      if(id == 0) //Optimization proposal: parallel reduction
-         for(int j = i + 1; j < R_EDGE - 1; j++){
-            float3 value = load_r_mat(r_mat, R_EDGE - 1, i);
-            float3 value2 = load_r_mat(r_mat, j, i);
-            store_r_mat(r_mat, R_EDGE - 1, i, value - value2);
-         }
-      barrier(CLK_LOCAL_MEM_FENCE);
-#if COMPRESSED_R
-      if(id < R_EDGE && i >= id){
-#else
-      if(id < R_EDGE){
-#endif
-         float3 value = load_r_mat(r_mat, i, id);
-         float3 value2 = load_r_mat(r_mat, R_EDGE - 1, i);
-         store_r_mat(r_mat, i, id, value * value2);
-      }
-      barrier(CLK_LOCAL_MEM_FENCE);
-   }
+	// Back substitution
+	__local float3 divider; // Local variable (i.e shared across threads in group) that holds the divider
 
-   if(id < buffers - 3){
-      // Store weights
-      const int index = group_id * (buffers - 3) + id;
-      const float3 weight = load_r_mat(r_mat, R_EDGE - 1, id);
-      store_float3(weights, index, weight);
-   }
+	// R_EDGE = buffer_count - 2 (= number of features + 3 (noisy color spp buffer) - 2)
+	// R is a (M + 1)x(M + 1) matrix, with M the number of features (here equal to buffer_count - 3)
+	// which gives us R_EDGE = M + 1 = buffer_count - 3 + 1 = buffer_count - 2
+	for(int i = R_EDGE - 2; i >= 0; i--)
+	{
+		if(id == 0)
+			divider = load_r_mat(r_mat, i, i);
+		
+		SyncThreads();
+		
+		#if COMPRESSED_R
+		if(id < R_EDGE && id >= i)
+		#else
+		// First values are always zero if R !COMPRESSED_R and
+		// "&& id >= i" makes not compressed code run little bit slower
+		if(id < R_EDGE)
+		#endif
+		{
+			float3 value = load_r_mat(r_mat, id, i);
+			store_r_mat(r_mat, id, i, value / divider);
+		}
+
+		SyncThreads();
+
+		if(id == 0) //Optimization proposal: parallel reduction
+		{
+			for(int j = i + 1; j < R_EDGE - 1; j++)
+			{
+				float3 value  = load_r_mat(r_mat, R_EDGE - 1, i);
+				float3 value2 = load_r_mat(r_mat, j, i);
+				store_r_mat(r_mat, R_EDGE - 1, i, value - value2);
+			}
+		}
+
+		SyncThreads();
+
+		#if COMPRESSED_R
+		if(id < R_EDGE && i >= id)
+		#else
+		if(id < R_EDGE)
+		#endif
+		{
+			float3 value  = load_r_mat(r_mat, i, id);
+			float3 value2 = load_r_mat(r_mat, R_EDGE - 1, i);
+			store_r_mat(r_mat, i, id, value * value2);
+		}
+		SyncThreads();
+	}
+
+	if(id < buffers - 3)
+	{
+		// Store weights
+		const int index = group_id * (buffers - 3) + id;
+		const float3 weight = load_r_mat(r_mat, R_EDGE - 1, id);
+		store_float3(weights, index, weight);
+	}
 }
 
 
@@ -841,7 +897,7 @@ __kernel void weighted_sum(
       (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH);
 
    // Load feature buffers
-   float3 world_position = load_float3(current_positions, linear_pixel);
+   float3 world_position = load_float3(current_positions, linear_pixel); // Reload here to have values without stochastic regularization noise (TODO: bind the normalized world_position buffer to avoid renormalizing again)
    float3 normal = load_float3(current_normals, linear_pixel);
    float features[BUFFER_COUNT - 3] = {
       FEATURE_BUFFERS
