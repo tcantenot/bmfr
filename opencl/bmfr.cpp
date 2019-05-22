@@ -36,6 +36,9 @@
 
 
 // ### Edit these defines if you have different input ###
+
+// TODO: turn size and dependent constants into variables (that will be baked as constant inside the kernel)
+
 // TODO detect IMAGE_SIZES automatically from the input files
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
@@ -352,17 +355,17 @@ int tasks()
     Double_buffer<cl::Buffer> normals_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
 
 	// World positions buffer (3 * float32)
-	// TODO: normalize in [0, 1]
+	// TODO: normalize in [0, 1] (or [-1, +1])
     Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
     
 	// Noisy 1spp color buffer (3 * float32)
 	Double_buffer<cl::Buffer> noisy_1spp_color_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
 
 	// Features buffer size
-    size_t in_buffer_data_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+    size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-    cl::Buffer features_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * in_buffer_data_size, nullptr);
+    cl::Buffer features_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size, nullptr);
 
 	// Noise-free color estimate (3 * float32)
     cl::Buffer noisefree_color_estimate(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
@@ -381,7 +384,7 @@ int tasks()
     cl::Buffer prev_frame_pixel_coords_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2));
 
 	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
-    cl::Buffer accept_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar));
+    cl::Buffer prev_frame_bilinear_samples_validity_mask(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar));
 
 	// Albedo buffer (3 * float32) // TODO: compress this
     cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
@@ -412,19 +415,27 @@ int tasks()
 
     // Set kernel arguments
     int arg_index = 0;
-    accum_noisy_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer); // [out] Previous frame pixel coordinates (after reprojection)
-    accum_noisy_kernel.setArg(arg_index++, accept_buffer);					// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
+    accum_noisy_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);				// [out] Previous frame pixel coordinates (after reprojection)
+    accum_noisy_kernel.setArg(arg_index++, prev_frame_bilinear_samples_validity_mask);	// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
     arg_index = 0;
 	
 	#if COMPRESSED_R
 	// TODO: replace 'buffer_count-2'
-	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy color channels.
-	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input.
+	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy 1spp color channels inputs.
+	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input with makes a size of 'buffer_count-2'.
 	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
 	// See section 3.3 and 3.4.
 
 	// Computed via sum of arithmetic sequence (that for the upper right triangle):
+	//    0  1  2  3  4  5 x
+	// 0 00 01 02 03 04 05
+	// 1  - 11 12 13 14 15
+	// 2  -  - 22 23 24 25
+	// 3  -  -  - 33 34 35
+	// 4  -  -  -  - 44 45
+	// 5  -  -  -  -  - 55
+	// y
 	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
     const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
 	#else
@@ -445,11 +456,11 @@ int tasks()
     weighted_sum_kernel.setArg(arg_index++, noisefree_color_estimate);	// [out] Noise-free color estimate
 
     arg_index = 0;
-    accum_filtered_kernel.setArg(arg_index++, noisefree_color_estimate);		// [in]  Noise free color estimate (computed as the weighted sum of the features)
-    accum_filtered_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);	// [in]  Previous frame pixel coordinates (after reprojection)
-    accum_filtered_kernel.setArg(arg_index++, accept_buffer);					// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-    accum_filtered_kernel.setArg(arg_index++, albedo_buffer);					// [in]  Albedo buffer of the current frame (non-noisy)
-    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);				// [out] Accumulated and tonemapped noise-free color estimate
+    accum_filtered_kernel.setArg(arg_index++, noisefree_color_estimate);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
+    accum_filtered_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);				// [in]  Previous frame pixel coordinates (after reprojection)
+    accum_filtered_kernel.setArg(arg_index++, prev_frame_bilinear_samples_validity_mask);	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+    accum_filtered_kernel.setArg(arg_index++, albedo_buffer);								// [in]  Albedo buffer of the current frame (non-noisy)
+    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);							// [out] Accumulated and tonemapped noise-free color estimate
 
     arg_index = 0;
     taa_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);	// [in] Previous frame pixel coordinates (after reprojection)
