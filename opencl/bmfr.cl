@@ -203,6 +203,7 @@ float3 YCoCg_to_RGB(float3 YCoCg)
 	};
 }
 
+// TODO: try to scale in [-1, +1] to have the same interval for every feature
 static inline float scale(float value, float min, float max)
 {
 	if(fabs(max - min) > 1.0f)
@@ -562,7 +563,13 @@ __kernel void accumulate_noisy_data(
 		STORE(features_data, location_in_data, feature);
 	}
 
-	// TODO: understand why we do not accumulate the pixels that are mirrored back into the image when the offset is applied
+	// The kernel works on a workset of size WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT
+	// -> the extra block margin is used to handle the offsets applied to reduce the block artifacts.
+	// [Section 3.5]: "To aid the reduction of blockiness, BMFR processes each frame over a grid of non-overlapping
+	//	blocks which is displaced with random offsets. These offsets prevent the artifacts that would arise from reusing
+	// same block positions on a static scene with a static camera."
+	// --> Only the pixels inside the image (after applying the offsets) should write to the output data that
+	// have the same size of the input image
 	if(pixel_without_mirror.x >= 0 && pixel_without_mirror.x < IMAGE_WIDTH &&
 	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < IMAGE_HEIGHT
 	)
@@ -872,6 +879,7 @@ __kernel void fitter(
 		SyncThreads();
 	}
 
+	// The features are stored in the first (buffers-3) values: the last 3 contain the noisy 1spp color channels
 	if(id < buffers - 3)
 	{
 		// Store weights
@@ -907,6 +915,7 @@ __kernel void weighted_sum(
 	// Load weights and min_max which this pixel should use.
 	const int2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly 'frame_number%BLOCK_OFFSETS_COUNT'
 
+	// Retrieve linear group index from the offset pixel
 	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
 	const int2 offset_pixel = pixel + BLOCK_EDGE_HALF - offset;
 	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH);
