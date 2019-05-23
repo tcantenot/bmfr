@@ -1,4 +1,254 @@
 
+// TODO replace: Placeholders
+
+template <typename T>
+inline __device__ T Min(T lhs, T rhs) {	return lhs < rhs ? lhs : rhs; }
+
+template <typename T>
+inline __device__ T Max(T lhs, T rhs) {	return lhs < rhs ? rhs : lhs; }
+
+template <typename T>
+inline __device__ T Clamp(T x, T a, T b) { return Max(Min(x, b), a); }
+
+template <typename T>
+inline __device__ T Sqrt(T x) { return sqrt(x); }
+
+template <typename T>
+struct tvec2
+{
+	T x, y;
+
+	__device__ tvec2(T v = T(0)): x(v), y(v) { }
+	__device__ tvec2(T xx, T yy): x(xx), y(yy) { }
+	template <typename U>
+	__device__ tvec2(tvec2<U> const & o): x(o.x), y(o.y) { }
+	__device__ tvec2(float2 const & o): x(o.x), y(o.y) { }
+	__device__ tvec2 operator+(tvec2 const & o) { return tvec2(x + o.x, y + o.y); }
+	__device__ tvec2 operator-(tvec2 const & o) { return tvec2(x - o.x, y - o.y); }
+	__device__ tvec2 operator*(tvec2 const & o) { return tvec2(x * o.x, y * o.y); }
+
+	__device__ tvec2 const & operator-=(tvec2<T> const & v) { x -= v.x; y -= v.y; return *this; }
+
+	__device__ tvec2 const & operator+=(T v) { x += v; y += v; return *this; }
+	__device__ tvec2 const & operator*=(T v) { x *= v; y *= v; return *this; }
+	__device__ tvec2 const & operator/=(T v) { x /= v; y /= v; return *this; }
+};
+
+template <typename T>
+inline __device__ tvec2<T> operator+(tvec2<T> const & l, tvec2<T> const & r) { return tvec2<T>(l.x + r.x, l.y + r.y); }
+
+template <typename T>
+inline __device__ tvec2<T> operator-(tvec2<T> const & l, tvec2<T> const & r) { return tvec2<T>(l.x - r.x, l.y - r.y); }
+
+template <typename T>
+inline __device__ tvec2<T> operator-(T x, tvec2<T> const & v) {	return tvec2<T>(x - v.x, x - v.y); }
+
+template <typename T>
+inline __device__ tvec2<T> operator-(tvec2<T> const & v, T x) {	return tvec2<T>(v.x - x, v.y - x); }
+
+template <typename T>
+inline __device__ tvec2<T> operator+(tvec2<T> const & v, T x) {	return tvec2<T>(v.x + x, v.y + x); }
+
+
+using ivec2 = tvec2<int>;
+using vec2 = tvec2<float>;
+
+
+template <typename T>
+struct tcvec3
+{
+	T x, y, z;
+};
+
+using cvec3 = tcvec3<float>;
+
+template <typename T>
+struct tvec3 : public tcvec3<T>
+{
+	__device__ tvec3(T v = 0) { x = v; y = v; z = v; }
+	__device__ tvec3(T xx, T yy, T zz) { x = xx; y = yy; z = zz; }
+	__device__ tvec3(tcvec3<T> const & o) { x = o.x; y = o.y; z = o.z; }
+	__device__ tvec3 & operator=(tvec3 const & o) { x = o.x; y = o.y; z = o.z; return *this; }
+	__device__ tvec3 operator+(tvec3 const & o) { return tvec3(x + o.x, y + o.y, z + o.z); }
+	__device__ tvec3 operator-(tvec3 const & o) { return tvec3(x - o.x, y - o.y, z - o.z); }
+	__device__ tvec3 operator*(tvec3 const & o) { return tvec3(x * o.x, y * o.y, z * o.z); }
+
+	__device__ tvec3 const & operator+=(tvec3 const & o) { x += o.x; y += o.y; z += o.z; return *this; }
+
+	__device__ tvec3 const & operator/=(T v) { x /= v; y /= v; z /= v; return *this; }
+
+	__device__ tvec3 operator/(tvec3<T> const & v) { return tvec3<T>(x / v.x, y / v.y, z / v.z); }
+};
+
+template <typename T>
+inline __device__ tvec3<T> operator*(T x, tvec3<T> const & v) {	return tvec3<T>(x * v.x, x * v.y, x * v.z); }
+
+template <typename T>
+inline __device__ tvec3<T> Min(tvec3<T> const & l, tvec3<T> const & r)
+{
+	return tvec3<T>(Min(l.x, r.x), Min(l.y, r.y), Min(l.z, r.z));
+}
+
+template <typename T>
+inline __device__ tvec3<T> Max(tvec3<T> const & l, tvec3<T> const & r)
+{
+	return tvec3<T>(Max(l.x, r.x), Max(l.y, r.y), Max(l.z, r.z));
+}
+
+template <typename T>
+inline __device__ tvec3<T> Clamp(tvec3<T> const & v, tvec3<T> const & a, tvec3<T> const & b)
+{
+	return tvec3<T>(Clamp(v.x, a.x, b.x), Clamp(v.y, a.y, b.y), Clamp(v.z, a.z, b.z));
+}
+
+template <typename T>
+inline __device__ tvec3<T> Pow(tvec3<T> const & v, T p)
+{
+	return tvec3<T>(pow(v.x, p), pow(v.y, p), pow(v.z, p));
+}
+
+using ivec3 = tvec3<int>;
+using vec3 = tvec3<float>;
+
+template <typename T>
+inline __device__ T Dot(tvec3<T> const & lhs, tvec3<T> const & rhs) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z; }
+
+template <typename T>
+struct tvec4
+{
+	T x, y, z, w;
+
+	__device__ tvec4(T v = 0): x(v), y(v), z(v), w(v) { }
+	__device__ tvec4(T xx, T yy, T zz, T ww): x(xx), y(yy), z(zz), w(ww) { }
+	__device__ tvec4(tvec3<T> const & v, T ww): x(v.x), y(v.y), z(v.z), w(ww) { }
+	__device__ tvec4 operator+(tvec4 const & o) { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
+	__device__ tvec4 operator-(tvec4 const & o) { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
+
+	__device__ tvec3<T> xyz() const { return tvec3<T>(x, y, z); }
+};
+
+using ivec4 = tvec4<int>;
+using vec4 = tvec4<float>;
+
+template <typename T>
+struct tmat4x4
+{
+	__device__ tvec4<T> row(int i) const { return tvec4<T>(0, 0, 0, 0); }
+};
+
+using mat4x4 = tmat4x4<float>;
+
+template <typename T>
+inline __device__ T Dot(tvec4<T> const & lhs, tvec4<T> const & rhs) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z + lhs.w*rhs.w; }
+
+template <typename T>
+inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
+
+#define C_FLT_MAX INFINITY
+
+#include <cuda_fp16.h>
+
+#define BLOCK_EDGE_LENGTH 32
+#define BLOCK_PIXELS (BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH)
+
+
+// ### Edit these defines if you want to experiment different parameters ###
+// The amount of noise added to feature buffers to cancel sigularities
+#define NOISE_AMOUNT 1e-2
+
+// The amount of new frame used in accumulated frame (1.f would mean no accumulation).
+#define BLEND_ALPHA 0.2f
+#define SECOND_BLEND_ALPHA 0.1f
+#define TAA_BLEND_ALPHA 0.2f
+
+// NOTE: if you want to use other than normal and world_position data you have to make
+// it available in the first accumulation kernel and in the weighted sum kernel
+#define NOT_SCALED_FEATURE_BUFFERS \
+1.f,\
+normal.x,\
+normal.y,\
+normal.z,\
+// The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
+#define SCALED_FEATURE_BUFFERS \
+world_position.x,\
+world_position.y,\
+world_position.z,\
+world_position.x*world_position.x,\
+world_position.y*world_position.y,\
+world_position.z*world_position.z
+
+#define BUFFER_COUNT 13
+#define FEATURES_NOT_SCALED 4
+#define FEATURES_SCALED 6
+#define IMAGE_WIDTH 1280
+#define IMAGE_HEIGHT 720
+
+// Rounds image sizes up to next multiple of BLOCK_EDGE_LENGTH
+#define WORKSET_WIDTH  (BLOCK_EDGE_LENGTH * ((IMAGE_WIDTH  + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
+#define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
+
+#define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
+
+// These local sizes are used with 2D kernels which do not require spesific local size
+// (Global sizes are always a multiple of 32)
+#define LOCAL_WIDTH 8
+#define LOCAL_HEIGHT 8
+
+
+// We need a margin of one block (BLOCK_EDGE_LENGTH) because we are offsetting the blocks
+// at most one block to the left or the right to avoid blocky artifacts.
+// So most of the time, we have 2 partially filled blocks and BLOCK_COUNT_X-1 full blocks on one row
+
+// Example: image of 8x12 with blocks of 4x1
+
+// No offset: 2x3 = 6 blocks
+// |....|....|
+// |....|....|
+// |....|....|
+
+// With some offset (here (-2, 0)): 3x3 = 9 blocks
+// |--..|....|..--|
+// |--..|....|..--|
+// |--..|....|..--|
+
+// Workset with margin width
+#define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
+
+// Workset with margin height
+#define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
+
+// Number of blocks in X dim in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT_X (WORKSET_WITH_MARGINS_WIDTH  / BLOCK_EDGE_LENGTH)
+
+// Number of blocks in Y dim in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT_Y (WORKSET_WITH_MARGINS_HEIGHT / BLOCK_EDGE_LENGTH)
+
+// Number of block in the workset with margin
+#define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
+
+#define R_EDGE (BUFFER_COUNT - 2)
+
+#define POSITION_LIMIT_SQUARED 0.010000f
+#define NORMAL_LIMIT_SQUARED 1.000000f
+
+// ### Edit these defines to change optimizations for your target hardware ###
+// If 1 uses ~half local memory space for R, but computing indexes is more complicated
+#define COMPRESSED_R 1
+
+// If 1 stores tmp_data to private memory when it is loaded for dot product calculation
+#define CACHE_TMP_DATA 1
+
+// If 1 features_data buffer is in half precision for faster load and store.
+// NOTE: if world position values are greater than 256 this cannot be used because
+// 256*256 is infinity in half-precision
+#define USE_HALF_PRECISION_IN_FEATURES_DATA 0
+
+// 256 is the maximum local size on AMD GCN
+// Synchronization within 32x32=1024 block requires unrolling four times
+#define LOCAL_SIZE 256
+
+
+////////////////////////////////////////////////////////////////////////////////
 
 // Note: CUDA volatile qualifier
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#volatile-qualifier
@@ -23,7 +273,7 @@
 
 // TODO: add default defines when not compiling with NVRTC
 // (might first divide "true" defines (constants or value dependent on the number of features) 
-// and variables (values that depend on RT size)
+// and variables (values that depend on RT size, blend alpha values, ...)
 
 // Threads synchronization /////////////////////////////////////////////////////
 
@@ -113,23 +363,23 @@ inline __device__ void parallel_reduction_max_256(float * result, volatile float
 
 // TODO: try to cycle through all offsets using Bayer matrix
 #define BLOCK_OFFSETS_COUNT 16
-static const ivec2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
-	ivec2( -14, -14),
-	ivec2(   4,  -6),
-	ivec2(  -8,  14),
-	ivec2(   8,   0),
-	ivec2( -10,  -8),
-	ivec2(   2,  12),
-	ivec2(  12, -12),
-	ivec2( -10,   0),
-	ivec2(  12,  14),
-	ivec2(  -8, -16),
-	ivec2(   6,   6),
-	ivec2(  -2,  -2),
-	ivec2(   6, -14),
-	ivec2( -16,  12),
-	ivec2(  14,  -4),
-	ivec2(  -6,   4)
+__device__ __constant__ float2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
+	{ -14, -14 },
+	{   4,  -6 },
+	{  -8,  14 },
+	{   8,   0 },
+	{ -10,  -8 },
+	{   2,  12 },
+	{  12, -12 },
+	{ -10,   0 },
+	{  12,  14 },
+	{  -8, -16 },
+	{   6,   6 },
+	{  -2,  -2 },
+	{   6, -14 },
+	{ -16,  12 },
+	{  14,  -4 },
+	{  -6,   4 }
 };
 
 
@@ -173,22 +423,28 @@ static const ivec2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
 // y
 #endif
 
-inline __device__ vec3 load_r_mat(const vec3 * r_mat, const int x, const int y)
+// TODO: if the function below do not work w/o volatile make them macros
+
+inline __device__ vec3 load_r_mat(const cvec3 * r_mat, const int x, const int y)
 {
    return r_mat[R_ACCESS];
 }
 
-inline __device__ void store_r_mat(volatile vec3* r_mat, const int x, const int y, const vec3 value)
+inline __device__ void store_r_mat(/*volatile*/ cvec3* r_mat, const int x, const int y, vec3 value)
 {
-   r_mat[R_ACCESS] = value;
+   r_mat[R_ACCESS] = *reinterpret_cast<cvec3*>(&value);
 }
 
-inline __device__ void store_r_mat_broadcast(volatile vec3 * r_mat, const int x, const int y, const float value)
+inline __device__ void store_r_mat_broadcast(/*volatile*/ cvec3 * r_mat, const int x, const int y, const float value)
 {
-   r_mat[R_ACCESS] = value;
+	cvec3 v;
+	v.x = value;
+	v.y = value;
+	v.z = value;
+	r_mat[R_ACCESS] = v;
 }
 
-inline __device__ void store_r_mat_channel(volatile vec3 * r_mat, const int x, const int y, const int channel, const float value)
+inline __device__ void store_r_mat_channel(/*volatile*/ cvec3 * r_mat, const int x, const int y, const int channel, const float value)
 {
    if(channel == 0)
       r_mat[R_ACCESS].x = value;
@@ -211,7 +467,7 @@ inline __device__ float random(unsigned int a)
 	a = (a+0xfd7046c5) + (a<<3);
 	a = (a^0xb55a4f09) ^ (a>>16);
 
-	return convert_float(a) / convert_float(UINT_MAX);
+	return float(a) / float(UINT_MAX);
 }
 
 inline __device__ float add_random(
@@ -326,7 +582,7 @@ inline __device__ ivec4 FloatToIntRn(vec4 v)
 
 // Load/store vec3 functions /////////////////////////////////////////////////
 
-inline void store_float3(volatile float * __restrict__ buffer, const int index, const vec3 value)
+inline __device__ void store_float3(volatile float * __restrict__ buffer, const int index, const vec3 value)
 {
 	buffer[index * 3 + 0] = value.x;
 	buffer[index * 3 + 1] = value.y;
@@ -477,7 +733,7 @@ __global__ void accumulate_noisy_data(
 				vec3 prev_world_position = load_float3(previous_positions, linear_sample_location);
 
 				// Compute world distance squared
-				vec3 position_difference = prev_world_position - world_position.xyz;
+				vec3 position_difference = prev_world_position - world_position.xyz();
 				float position_distance_squared = Dot(position_difference, position_difference);
 
 				// World position distance discard
@@ -565,28 +821,28 @@ __global__ void accumulate_noisy_data(
 		new_color.z
 	};
 
-	for(int feature_num = 0; feature_num < BUFFER_COUNT; ++feature_num)
-	{
-		const int x_block = gid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
-		const int y_block = gid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
-		const int x_in_block = gid.x % BLOCK_EDGE_LENGTH; // Thread coordinate x inside block in [0, BLOCK_EDGE_LENGTH-1]
-		const int y_in_block = gid.y % BLOCK_EDGE_LENGTH; // Thread coordinate y inside block in [0, BLOCK_EDGE_LENGTH-1]
+	const unsigned int x_block = gid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
+	const unsigned int y_block = gid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
+	const unsigned int x_in_block = gid.x % BLOCK_EDGE_LENGTH; // Thread coordinate x inside block in [0, BLOCK_EDGE_LENGTH-1]
+	const unsigned int y_in_block = gid.y % BLOCK_EDGE_LENGTH; // Thread coordinate y inside block in [0, BLOCK_EDGE_LENGTH-1]
 
+	const unsigned int features_base_offset = x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
+		x_block * BLOCK_PIXELS * BUFFER_COUNT +
+		y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) *
+		BLOCK_PIXELS * BUFFER_COUNT;
+	
+	for(unsigned int feature_num = 0; feature_num < BUFFER_COUNT; ++feature_num)
+	{
 		// Index in feature buffer (data are concatenated)
+		// | Block 0 feature 0 | Block 0 feature 0 | ... | Block 0 feature M | ... | Block 1 feature 0 | ... | Block N feature 0 | ... | Block N feature M |
+		#if 0
 		const unsigned int location_in_data = feature_num * BLOCK_PIXELS + 
 			x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
 			x_block * BLOCK_PIXELS * BUFFER_COUNT +
 			y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) *
 			BLOCK_PIXELS * BUFFER_COUNT;
-
-		#if 0
-		// | Block 0 feature 0 | Block 0 feature 0 | ... | Block 0 feature M | ... | Block 1 feature 0 | ... | Block N feature 0 | ... | Block N feature M |
-		const unsigned int numBlockX = WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH;
-		const unsigned int location_in_data = y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) * BLOCK_PIXELS * BUFFER_COUNT +
-											  x_block * BLOCK_PIXELS * BUFFER_COUNT +
-											  feature_num * BLOCK_PIXELS +
-											  y_in_block * BLOCK_EDGE_LENGTH +
-											  x_in_block;
+		#else
+		const unsigned int location_in_data = features_base_offset + feature_num * BLOCK_PIXELS;
 		#endif
 
 		float feature = features[feature_num];
@@ -614,7 +870,7 @@ __global__ void accumulate_noisy_data(
 	{
 		store_float3(current_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
 		out_prev_frame_pixel[linear_pixel] = prev_frame_pixel_f; // Previous frame pixel coordinates (to sample history)
-		accept_bools[linear_pixel] = store_accept; // "History validity" bitmask
+		accept_bools[linear_pixel] = store_accept; // "Previous frame bilinear samples validity" bitmask
 	}
 }
 
@@ -659,7 +915,7 @@ __global__ void fitter(
 
 	__shared__ float pr_shared_data[LOCAL_SIZE];		// Shared memory used to perform parallel reduction (max, min, sum)
 	__shared__ float u_vec_sdata[BLOCK_PIXELS];			// Shared memory used to store the 'u' vectors
-	__shared__ vec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
+	__shared__ cvec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
 	__shared__ float u_length_squared;					// Shared memory variable that holds the 'u' vector square length
 	__shared__ float dotProd;							// Shared memory variable that holds the dot product of...
 	__shared__ float block_min;							// Shared memory variable that holds the result of the parallel min reduction
@@ -668,7 +924,7 @@ __global__ void fitter(
 
 	float * pr_data_256 = &pr_shared_data[0];
 	float * u_vec = &u_vec_sdata[0];
-	vec3 * r_mat = &r_mat_sdata[0];
+	cvec3 * r_mat = &r_mat_sdata[0];
 
 	const int group_id = blockIdx.x;
 	const int id = threadIdx.x; // in [0, 255]
@@ -884,7 +1140,7 @@ __global__ void fitter(
 	}
 
 	// Back substitution
-	__shared__ vec3 divider; // Shared memory variable that holds the divider
+	__shared__ cvec3 divider; // Shared memory variable that holds the divider
 
 	// R_EDGE = buffer_count - 2 (= number of features + 3 (noisy color spp buffer) - 2)
 	// R is a (M + 1)x(M + 1) matrix, with M the number of features (here equal to buffer_count - 3)
@@ -905,12 +1161,13 @@ __global__ void fitter(
 		#endif
 		{
 			vec3 value = load_r_mat(r_mat, id, i);
-			store_r_mat(r_mat, id, i, value / divider);
+			store_r_mat(r_mat, id, i, value / vec3(divider.x, divider.y, divider.z));
 		}
 
 		SyncThreads();
 
-		if(id == 0) //Optimization proposal: parallel reduction
+		#if 1 // ORIGINAL
+		if(id == 0) // Optimization proposal: parallel reduction
 		{
 			for(int j = i + 1; j < R_EDGE - 1; j++)
 			{
@@ -919,6 +1176,28 @@ __global__ void fitter(
 				store_r_mat(r_mat, R_EDGE - 1, i, value - value2);
 			}
 		}
+		#else
+		const int startRIdx = (i + 1);
+		const int endRIdx	= (R_EDGE - 1);
+		const int numItems	= endRIdx - startRIdx;
+		if(id < numItems)
+		{
+			// Parallel load
+			const int j = startRIdx + id;
+			vec3 value2 = load_r_mat(r_mat, j, i);
+
+			// Then iterate over active threads and gather data from lane 0
+			if(id == 0)
+			{
+				for(int k = startRIdx; k < endRIdx; k++)
+				{
+					vec3 value = load_r_mat(r_mat, R_EDGE - 1, i);
+					vec3 currValue2 = ...;// load from lane k
+					store_r_mat(r_mat, R_EDGE - 1, i, value - currValue2);
+				}
+			}
+		}
+		#endif
 
 		SyncThreads();
 
@@ -1017,7 +1296,7 @@ __global__ void weighted_sum(
 }
 
 
-// Acumulate filtered data kernel //////////////////////////////////////////////
+// Accumulate filtered data kernel /////////////////////////////////////////////
 // -> outputs the noise-free accumulated color estimate + a tonemapped version w/ albedo
 
 // TODO: make 2 versions: one for frame 0 and one for the rest (avoid a branch)
@@ -1115,7 +1394,7 @@ __global__ void accumulate_filtered_data(
 				// Using the cumulative moving average in this second temporal accumulation is crucial since
 				// the first block fitted after an occlusion is more likely to contain outlier data and with
 				// the cumulative moving average it is mixed with subsequent frames more quickly.
-				blend_alpha = 1.f / convert_float(current_spp[linear_pixel]);
+				blend_alpha = 1.f / float(current_spp[linear_pixel]);
 				blend_alpha = Max(blend_alpha, SECOND_BLEND_ALPHA);
 				prev_color /= total_weight;
 
@@ -1133,6 +1412,136 @@ __global__ void accumulate_filtered_data(
 
    // Remodulate albedo and tone map
    vec3 albedo = load_float3(albedo_buffer, linear_pixel);
-   const vec3 tone_mapped_color = Clamp(Pow(Max(0.f, albedo * accumulated_color), 0.454545f), 0.f, 1.f);
+   const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * accumulated_color), 0.454545f), vec3(0.f), vec3(1.f));
    store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+}
+
+
+
+// TAA kernel //////////////////////////////////////////////////////////////////
+
+// TODO:
+// - make two versions of the kernel: one for the frame 0 and one for the rest
+// - optimize with local/shared memory
+__global__ void taa(
+	const vec2 * __restrict__ in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * __restrict__ new_frame,			// [in]	 Current frame color buffer
+		  float * __restrict__ result_frame,		// [out] Antialiased frame color buffer
+	const float * __restrict__ prev_frame,			// [in]  Previous frame color buffer
+	const int frame_number							// [in]  Current frame number
+)
+{
+	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
+	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+   
+	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+		return;
+
+	// Linear pixel index
+	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
+
+	// Current frame color
+	vec3 my_new_color = load_float3(new_frame, linear_pixel);
+
+	// Previous frame pixel coordinates
+	const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+	ivec2 prev_frame_pixel_i = FloatToIntRn(prev_frame_pixel_f);
+
+	//!!!!!!
+	// Add "|| true" to debug other kernels (removes taa)
+	// Return if all sampled pixels are going to be out of image area
+	if(frame_number == 0 ||
+		prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
+		prev_frame_pixel_i.x >= IMAGE_WIDTH || prev_frame_pixel_i.y >= IMAGE_HEIGHT
+	)
+	{
+		store_float3(result_frame, linear_pixel, my_new_color);
+		return;
+	}
+
+	// Compute the color AABB in the 3x3 neighbourhood and the min/max in a cross pattern around the current pixel
+	vec3 minimum_box	= +C_FLT_MAX;
+	vec3 minimum_cross	= +C_FLT_MAX;
+	vec3 maximum_box	= -C_FLT_MAX;
+	vec3 maximum_cross	= -C_FLT_MAX;
+	for(int y = -1; y <= 1; ++y)
+	{
+		for(int x = -1; x <= 1; ++x)
+		{
+			ivec2 sample_location = pixel + ivec2(x, y);
+			if(sample_location.x >= 0 && sample_location.y >= 0 &&
+			   sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT
+			)
+			{
+				vec3 sample_color;
+				if(x == 0 && y == 0)
+					sample_color = my_new_color;
+				else
+					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * IMAGE_WIDTH);
+
+				sample_color = RGB_to_YCoCg(sample_color);
+
+				if(x == 0 || y == 0)
+				{
+					minimum_cross = Min(minimum_cross, sample_color);
+					maximum_cross = Max(maximum_cross, sample_color);
+				}
+
+				minimum_box = Min(minimum_box, sample_color);
+				maximum_box = Max(maximum_box, sample_color);
+			}
+		}
+	}
+
+	// Bilinear sampling of previous frame.
+	// Note: work-item has already returned if the sampling location is completly out of image
+	vec3 prev_color = vec3(0.f, 0.f, 0.f);
+	float total_weight = 0;
+	vec2 pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+	vec2 one_minus_pixel_fract = 1.f - pixel_fract;
+
+	if(prev_frame_pixel_i.y >= 0)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
+
+		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		{
+			float weight = pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
+
+	if(prev_frame_pixel_i.y < IMAGE_HEIGHT - 1)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
+
+		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		{
+			float weight = pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
+
+	prev_color /= total_weight; // Total weight can be less than one on the edges
+	vec3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
+
+	// Note: Some references use more complicated methods to move the previous frame color to the YCoCg space AABB
+	vec3 minimum = (minimum_box + minimum_cross) / 2.f;
+	vec3 maximum = (maximum_box + maximum_cross) / 2.f;
+	vec3 prev_color_rgb = YCoCg_to_RGB(Clamp(prev_color_ycocg, minimum, maximum));
+
+	vec3 result_color = TAA_BLEND_ALPHA * my_new_color + (1.f - TAA_BLEND_ALPHA) * prev_color_rgb; // Lerp(prev_color_rgb, my_new_color, TAA_BLEND_ALPHA);
+	store_float3(result_frame, linear_pixel, result_color);
 }

@@ -172,7 +172,7 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\;$(AMDAPPSDKROOT)lib\x64;$(INTELOCLSDKROOT)lib\x64;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Opengl32.lib;OpenCL.lib;OpenImageIOD.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIOD.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
@@ -180,6 +180,8 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
 If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIOD.dll" copy "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIOD.dll" "$(OutDir)";
 If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll" "$(OutDir)";</Command>
     </PostBuildEvent>
+    <CudaLink />
+    <CudaCompile />
   </ItemDefinitionGroup>
   <ItemGroup>
     <Intel_OpenCL_Build_Rules Include="bmfr.cl">
@@ -194,6 +196,9 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
   <ItemGroup>
     <ClInclude Include="..\matlab\data\frames\camera_matrices.h" />
     <ClInclude Include="CLUtils\CLUtils.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="..\cuda\bmfr.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
