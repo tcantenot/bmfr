@@ -1,32 +1,17 @@
-/*  The MIT License (MIT)
- *  
- *  Copyright (c) 2019 Matias Koskela / Tampere University
- *  Copyright (c) 2018 Kalle Immonen / Tampere University of Technology
- *  
- *  Permission is hereby granted, free of charge, to any person obtaining a copy
- *  of this software and associated documentation files (the "Software"), to deal
- *  in the Software without restriction, including without limitation the rights
- *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- *  copies of the Software, and to permit persons to whom the Software is
- *  furnished to do so, subject to the following conditions:
- *  
- *  The above copyright notice and this permission notice shall be included in
- *  all copies or substantial portions of the Software.
- *  
- *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- *  THE SOFTWARE.
- */
 
-#include "bmfr.hpp"
+#include "bmfr_cuda.hpp"
+#include "bmfr.cuh"
+
+int bmfr_cuda()
+{
+	run_cuda_hello();
+	return 0;
+}
+
+#if 0
 #include "OpenImageIO/imageio.h"
 #include "CLUtils/CLUtils.hpp"
 #include <functional>
-#include <memory>
 
 #define _CRT_SECURE_NO_WARNINGS
 #define STR_HELPER(x) #x
@@ -216,7 +201,7 @@ float clamp(float value, float minimum, float maximum)
     return std::max(std::min(value, maximum), minimum);
 }
 
-int bmfr_opencl()
+int tasks()
 {
     printf("Initialize.\n");
     clutils::CLEnv clEnv;
@@ -640,3 +625,30 @@ int bmfr_opencl()
 
     return 0;
 }
+
+int main()
+{
+    try
+    {
+        return tasks();
+    }
+	catch(...)
+	{
+		return 1;
+	}
+    /*catch (std::exception &err)
+    {
+        printf("Exception: %s", err.what());
+        std::exception *err_ptr = &err;
+        cl::Error *cl_err = dynamic_cast<cl::Error *>(err_ptr);
+        if(cl_err != nullptr)
+        {
+            printf(" call with error code %i = %s\n",
+                   cl_err->err(), clutils::getOpenCLErrorCodeString(cl_err->err()));
+            return cl_err->err();
+        }
+        printf("\n");
+        return 1;
+    }*/
+}
+#endif
