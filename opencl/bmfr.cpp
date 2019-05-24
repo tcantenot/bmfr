@@ -398,7 +398,7 @@ int bmfr_opencl()
     //cl::Buffer features_weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
     cl::Buffer features_weights_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(cl_float));
 
-	// Min and max of features values per block (world_positions) (6 * float32)
+	// Min and max of features values per block (world_positions) (6 * 2 * float32)
     //cl::Buffer features_min_max_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * 6 * sizeof(cl_float2));
     cl::Buffer features_min_max_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2));
 

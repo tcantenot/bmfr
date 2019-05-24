@@ -175,8 +175,9 @@ inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
 1.f,\
 normal.x,\
 normal.y,\
-normal.z,\
+normal.z\
 // The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
+#if 0
 #define SCALED_FEATURE_BUFFERS \
 world_position.x,\
 world_position.y,\
@@ -184,10 +185,13 @@ world_position.z,\
 world_position.x*world_position.x,\
 world_position.y*world_position.y,\
 world_position.z*world_position.z
+#else
+#define SCALED_FEATURE_BUFFERS
+#endif
 
-#define BUFFER_COUNT 13
+#define BUFFER_COUNT (4 + 3)
 #define FEATURES_NOT_SCALED 4
-#define FEATURES_SCALED 6
+#define FEATURES_SCALED 0
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 
@@ -241,10 +245,10 @@ world_position.z*world_position.z
 
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated
-#define COMPRESSED_R 1
+#define COMPRESSED_R 0
 
 // If 1 stores tmp_data to private memory when it is loaded for dot product calculation
-#define CACHE_TMP_DATA 1
+#define CACHE_TMP_DATA 0
 
 // If 1 features_data buffer is in half precision for faster load and store.
 // NOTE: if world position values are greater than 256 this cannot be used because

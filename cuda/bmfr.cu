@@ -1,3 +1,4 @@
+#if 1
 #include "bmfr.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -852,7 +853,7 @@ __global__ void fitter(
 			r_value = 0.0f;
 		}
 
-		int id_limited = min(id, buffers - 3);
+		int id_limited = Min(id, buffers - 3);
 		if(col < buffers - 3)
 			store_r_mat_broadcast(r_mat, col_limited, id_limited, r_value);
 		else
@@ -1093,11 +1094,11 @@ __global__ void weighted_sum(
 
 		// Load weight and sum
 		vec3 weight = load_float3(weights, group_index * (BUFFER_COUNT - 3) + feature_buffer);
-		color += weight * feature;
+		color += 1 * feature;
 	}
 
 	// Remove negative values from every component of the fitting results
-	color = Max(vec3(0.f), color);
+	color = vec3(1.f, 0.f, 1.f);//Max(vec3(0.f), color);
 
 	// !!!!!
 	// Uncomment this for debugging. Removes fitting completely.
@@ -1428,6 +1429,7 @@ extern "C" void run_taa(
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#endif
 #include <stdio.h>
 
 __global__ void cuda_hello()
@@ -1441,11 +1443,17 @@ extern "C" void run_cuda_hello()
 	cudaDeviceSynchronize();
 }
 
+#if 0
+
 #include <stdio.h>
-#include <assert.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
+//#include <assert.h>
+//#include <cuda.h>
+//#include <cuda_runtime.h>
+
+
+#ifndef __NVCC__
 #include <iostream>
+#endif
 
 __global__ void test(){
     printf("Hi Cuda World\n");
@@ -1455,6 +1463,7 @@ int main( int argc, char** argv )
 {
 	cudaError_t ret = cudaSuccess;
 	
+#if 0
 	int driverVersion = 0;
 	ret = cudaDriverGetVersion(&driverVersion);
 	assert(ret == cudaSuccess);
@@ -1472,13 +1481,22 @@ int main( int argc, char** argv )
 	size_t prinfFIFOSize = 0;
 	ret = cudaDeviceGetLimit(&prinfFIFOSize,cudaLimitPrintfFifoSize);
 	assert(ret == cudaSuccess);
+#endif
+
 	printf ("Before kernel\n");
     test<<<1,1>>>();
     ret = cudaDeviceSynchronize();
+#if 0
 	run_cuda_hello();
     ret = cudaDeviceSynchronize();
+#endif
 	printf ("After kernel\n");
+
+	#ifndef __NVCC__
 	char wait;
 	std::cin >> wait;
+	#endif
+
     return 0;
 }
+#endif

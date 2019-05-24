@@ -56,7 +56,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v140</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
@@ -146,7 +146,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\;$(INTELOCLSDKROOT)lib\x64;$(AMDAPPSDKROOT)lib\x64;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Opengl32.lib;OpenCL.lib;OpenImageIO.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIO.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -184,6 +184,11 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <CudaLink />
     <CudaCompile />
     <CudaCompile />
+    <CudaCompile>
+      <Keep>true</Keep>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
+      <InterleaveSourceInPTX>true</InterleaveSourceInPTX>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <Intel_OpenCL_Build_Rules Include="bmfr.cl">
