@@ -209,6 +209,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClCompile Include="CLUtils\CLUtils.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\Common.hpp" />
     <ClInclude Include="..\cuda\bmfr.cuh" />
     <ClInclude Include="..\cuda\bmfr_cuda.hpp" />
     <ClInclude Include="..\matlab\data\frames\camera_matrices.h" />

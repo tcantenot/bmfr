@@ -47,7 +47,7 @@
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 // TODO detect FRAME_COUNT from the input files
-#define FRAME_COUNT 60
+#define FRAME_COUNT 1
 // Location where input frames and feature buffers are located
 #define INPUT_DATA_PATH ../data/classroom/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
@@ -89,15 +89,15 @@
 
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated
-#define COMPRESSED_R 1
+#define COMPRESSED_R 0
 
 // If 1 stores tmp_data to private memory when it is loaded for dot product calculation
-#define CACHE_TMP_DATA 1
+#define CACHE_TMP_DATA 0
 
 // If 1 features_data buffer is in half precision for faster load and store.
 // NOTE: if world position values are greater than 256 this cannot be used because
 // 256*256 is infinity in half-precision
-#define USE_HALF_PRECISION_IN_FEATURES_DATA 1
+#define USE_HALF_PRECISION_IN_FEATURES_DATA 0
 
 // If 1 adds __attribute__((reqd_work_group_size(256, 1, 1))) to fitter and
 // accumulate_noisy_data kernels. With some codes, attribute made the kernels faster and
@@ -357,20 +357,21 @@ int bmfr_opencl()
 
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
 	// TODO: compress data? half? -> would require different storage than feature buffer
-    Double_buffer<cl::Buffer> normals_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> normals_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
 
 	// World positions buffer (3 * float32)
 	// TODO: normalize in [0, 1] (or [-1, +1])
-    Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
     
 	// Noisy 1spp color buffer (3 * float32)
-	Double_buffer<cl::Buffer> noisy_1spp_color_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+	Double_buffer<cl::Buffer> noisy_1spp_color_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
 
 	// Features buffer size
-    size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+    const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size;
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-    cl::Buffer features_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size, nullptr);
+    cl::Buffer features_buffer(context, CL_MEM_READ_WRITE, features_buffer_size, nullptr);
 
 	// Noise-free color estimate (3 * float32)
     cl::Buffer noisefree_color_estimate(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
@@ -406,7 +407,7 @@ int bmfr_opencl()
     cl::Buffer features_min_max_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2));
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_char));
+    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(cl_char));
 
 	std::vector<Double_buffer<cl::Buffer> *> all_double_buffers =
 	{
@@ -657,7 +658,7 @@ int bmfr_opencl()
  
 #define MAX_SOURCE_SIZE (0x100000)
 
-int bmfr_c_opencl()
+int bmfr_c_opencl(TmpData & tmpData)
 {
     printf("Initialize.\n");
 
@@ -884,19 +885,15 @@ int bmfr_c_opencl()
 	// Phase II: feature fitting phase
 	// 3.3 Blockwise Multi-Order Feature Regression (BMFR)
 	// 3.4 Feature Fitting with Stochastic Regularization
-	//cl::Kernel &fitter_kernel(clEnv.addProgram(0, "bmfr.cl", "fitter", build_options.str().c_str()));
 	cl_kernel fitter_kernel = clCreateKernel(program, "fitter", &ret);
 	assert(ret == CL_SUCCESS);
 
-	//cl::Kernel &weighted_sum_kernel(clEnv.addProgram(0, "bmfr.cl", "weighted_sum", build_options.str().c_str()));
 	cl_kernel weighted_sum_kernel = clCreateKernel(program, "weighted_sum", &ret);
 	assert(ret == CL_SUCCESS);
 
-	//cl::Kernel &accum_filtered_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_filtered_data", build_options.str().c_str()));
 	cl_kernel accum_filtered_kernel = clCreateKernel(program, "accumulate_filtered_data", &ret);
 	assert(ret == CL_SUCCESS);
 
-	//cl::Kernel &taa_kernel(clEnv.addProgram(0, "bmfr.cl", "taa", build_options.str().c_str()));
 	cl_kernel taa_kernel = clCreateKernel(program, "taa", &ret);
 	assert(ret == CL_SUCCESS);
 
@@ -987,7 +984,7 @@ int bmfr_c_opencl()
 
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
 	// TODO: compress data? half? -> would require different storage than feature buffer
-	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
 
 	// World positions buffer (3 * float32)
 	// TODO: normalize in [0, 1] (or [-1, +1])
@@ -997,10 +994,11 @@ int bmfr_c_opencl()
 	Double_buffer<cl_mem> noisy_1spp_color_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
 
 	// Features buffer size
-	size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+	const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size;
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-	cl_mem features_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size, nullptr, &ret);
+	cl_mem features_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Noise-free color estimate (3 * float32)
@@ -1035,12 +1033,14 @@ int bmfr_c_opencl()
 
 	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
 	//cl_mem features_weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
-	cl_mem features_weights_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(cl_float), nullptr, &ret);
+	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(cl_float);
+	cl_mem features_weights_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_weights_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Min and max of features values per block (world_positions) (6 * 2 * float32)
 	//cl_mem features_min_max_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * 6 * sizeof(cl_float2));
-	cl_mem features_min_max_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2), nullptr, &ret);
+	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2);
+	cl_mem features_min_max_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_min_max_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
@@ -1193,7 +1193,6 @@ int bmfr_c_opencl()
 		ret = clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
  
-
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weightss
 		arg_index = 5;
@@ -1203,6 +1202,47 @@ int bmfr_c_opencl()
 		assert(ret == CL_SUCCESS);
 		ret = clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
+
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			size_t normals_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
+			tmpData.normals.resize(normals_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_size, tmpData.normals.data(), 0, NULL, NULL);
+
+			size_t positions_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
+			tmpData.positions.resize(positions_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_size, tmpData.positions.data(), 0, NULL, NULL);
+
+			//size_t noisy1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
+			//tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
+			//ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_color_buffer.current(), false, 0, noisy1spp_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
+			//assert(ret == CL_SUCCESS);
+
+			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			size_t spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(cl_char);
+			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
+			ret = clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL);
+
+			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_weights_buffer, false, 0, features_weights_buffer_size, tmpData.features_weights_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_min_max_buffer, false, 0, features_min_max_buffer_size, tmpData.features_min_max_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			ret = clFlush(command_queue);
+			assert(ret == CL_SUCCESS);
+			ret = clFinish(command_queue);
+			assert(ret == CL_SUCCESS);
+			
+			return 0;
+		}
+		#endif
 
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 		arg_index = 3;
@@ -1303,7 +1343,7 @@ int bmfr_c_opencl()
 			continue;
 
 		// Output image
-		std::string output_file_name = OUTPUT_FILE_NAME + std::to_string(frame) + "_new.png";
+		std::string output_file_name = "outputs/result_" + std::to_string(frame) + "_opencl.png";
 		// Crops back from WORKSET_SIZE to IMAGE_SIZE
 		OpenImageIO::ImageSpec spec(IMAGE_WIDTH, IMAGE_HEIGHT, 3,
 									OpenImageIO::TypeDesc::FLOAT);

@@ -26,6 +26,7 @@
     <ClInclude Include="..\cuda\bmfr_cuda.hpp">
       <Filter>Cuda</Filter>
     </ClInclude>
+    <ClInclude Include="..\Common.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="OpenCL">

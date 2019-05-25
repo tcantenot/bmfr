@@ -139,7 +139,7 @@ struct DeviceBuffer
 	size_t size = 0;
 };
 
-static void bmfr()
+int bmfr_cuda(TmpData & tmpData)
 {
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
     std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
@@ -214,23 +214,24 @@ static void bmfr()
 
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
 	// TODO: compress data? half? -> would require different storage than feature buffer
-    Double_buffer<DeviceBuffer> normals_buffer(OUTPUT_SIZE * 3 * sizeof(float));
+    Double_buffer<DeviceBuffer> normals_buffer(IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(float));
 	cudaBufferTotalSize += 2 * normals_buffer.current()->size;
 
 	// World positions buffer (3 * float32)
 	// TODO: normalize in [0, 1] (or [-1, +1])
-    Double_buffer<DeviceBuffer> positions_buffer(OUTPUT_SIZE * 3 * sizeof(float));
+    Double_buffer<DeviceBuffer> positions_buffer(IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(float));
 	cudaBufferTotalSize += 2 * positions_buffer.current()->size;
     
 	// Noisy 1spp color buffer (3 * float32)
-	Double_buffer<DeviceBuffer> noisy_1spp_color_buffer(OUTPUT_SIZE * 3 * sizeof(float));
+	Double_buffer<DeviceBuffer> noisy_1spp_color_buffer(IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(float));
 	cudaBufferTotalSize += 2 * noisy_1spp_color_buffer.current()->size;
 
 	// Features buffer size
-    size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
+    const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
+	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size;
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-    DeviceBuffer features_buffer(WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size);
+    DeviceBuffer features_buffer(features_buffer_size);
 	cudaBufferTotalSize += features_buffer.size;
 
 	// Noise-free color estimate (3 * float32)
@@ -276,7 +277,7 @@ static void bmfr()
 	cudaBufferTotalSize += features_min_max_buffer.size;
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-    Double_buffer<DeviceBuffer> spp_buffer(OUTPUT_SIZE * sizeof(char));
+    Double_buffer<DeviceBuffer> spp_buffer(IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(char));
 	cudaBufferTotalSize += 2 * spp_buffer.current()->size;
 
 	std::vector<Double_buffer<DeviceBuffer> *> all_double_buffers =
@@ -343,38 +344,12 @@ static void bmfr()
         }
 	};
 
-	const auto SaveDeviceFeaturesMinMaxImageToDisk = [](DeviceBuffer const & buffer, std::string const & output_file_name)
-	{
-		const size_t datasize = OUTPUT_SIZE * 3 * sizeof(float);
-		std::vector<float> outdata;
-		outdata.resize(datasize);
-
-		K_CUDA_CHECK(cudaMemcpy(outdata.data(), buffer.data, datasize, cudaMemcpyDeviceToHost));
-		K_CUDA_CHECK(cudaDeviceSynchronize());
-
-			// Output image
-		printf("  Save image %s\n", output_file_name.c_str());
-
-		// Crops back from WORKSET_SIZE to IMAGE_SIZE
-		OpenImageIO::ImageSpec spec(IMAGE_WIDTH, IMAGE_HEIGHT, 3, OpenImageIO::TypeDesc::FLOAT);
-		std::unique_ptr<OpenImageIO::ImageOutput> out(OpenImageIO::ImageOutput::create(output_file_name));
-		if(out && out->open(output_file_name, spec))
-		{
-			out->write_image(OpenImageIO::TypeDesc::FLOAT, outdata.data(), 3 * sizeof(float), WORKSET_WIDTH * 3 * sizeof(float), 0);
-			out->close();
-		}
-		else
-		{
-			printf("  Can't create image file on disk to location %s\n", output_file_name.c_str());
-		}
-	};
-
     dim3 k_block_size(LOCAL_WIDTH, LOCAL_HEIGHT);
-    dim3 k_workset_grid_size((IMAGE_WIDTH + k_block_size.x - 1) / k_block_size.x, (IMAGE_HEIGHT + k_block_size.y - 1) / k_block_size.y);
-	dim3 k_workset_with_margin_grid_size(((IMAGE_WIDTH + BLOCK_EDGE_LENGTH) + k_block_size.x - 1) / k_block_size.x, ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH) + k_block_size.y - 1) / k_block_size.y);
-    dim3 k_fitter_grid_size(WORKSET_WITH_MARGIN_BLOCK_COUNT);
+    dim3 k_workset_grid_size((WORKSET_WIDTH + k_block_size.x - 1) / k_block_size.x, (WORKSET_HEIGHT + k_block_size.y - 1) / k_block_size.y);
+	dim3 k_workset_with_margin_grid_size((WORKSET_WITH_MARGINS_WIDTH + k_block_size.x - 1) / k_block_size.x, (WORKSET_WITH_MARGINS_HEIGHT + k_block_size.y - 1) / k_block_size.y);
     dim3 k_fitter_block_size(LOCAL_SIZE);
-
+    dim3 k_fitter_grid_size((FITTER_KERNEL_GLOBAL_RANGE + k_fitter_block_size.x - 1) / k_fitter_block_size.x);
+	
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
 		printf("Frame %d\n", frame);
@@ -426,18 +401,7 @@ static void bmfr()
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-#if 0
-		//run_test(k_workset_grid_size, k_block_size, noisy_1spp_color_buffer.current()->getTypedData<float>());
-		//K_CUDA_CHECK(cudaDeviceSynchronize());
-
-		std::vector<float> debug;
-		debug.resize(noisy_1spp_color_buffer.current()->size / sizeof(float));
-		K_CUDA_CHECK(cudaMemcpy(debug.data(), noisy_1spp_color_buffer.current()->data, noisy_1spp_color_buffer.current()->size, cudaMemcpyDeviceToHost));
-
-		//SaveDevice3Float32ImageToDisk(*normals_buffer.current(),	TO_OUTPUTS_FOLDER("normals_buffer_") + std::to_string(frame) + ".png");
-		//SaveDevice3Float32ImageToDisk(*positions_buffer.previous(), TO_OUTPUTS_FOLDER("positions_buffer_") + std::to_string(frame) + ".png");
-		SaveDevice3Float32ImageToDisk(*noisy_1spp_color_buffer.current(),  TO_OUTPUTS_FOLDER("noisy_1spp_color_buffer_") + std::to_string(frame) + ".png");
-#endif
+		//SaveDevice3Float32ImageToDisk(*noisy_1spp_color_buffer.current(),  TO_OUTPUTS_FOLDER("noisy_1spp_color_buffer_") + std::to_string(frame) + ".png");
 
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weights
@@ -459,6 +423,43 @@ static void bmfr()
 		);
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
+
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			size_t normals_size = normals_buffer.current()->size;
+			tmpData.normals.resize(normals_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.normals.data(), normals_buffer.current()->data, normals_size, cudaMemcpyDeviceToHost));
+
+			size_t positions_size = positions_buffer.current()->size;
+			tmpData.positions.resize(positions_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.positions.data(), positions_buffer.current()->data, positions_size, cudaMemcpyDeviceToHost));
+
+			//size_t noisy1spp_size = noisy_1spp_color_buffer.current()->size;
+			//tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
+			//K_CUDA_CHECK(cudaMemcpy(tmpData.noisy_1spp.data(), noisy_1spp_color_buffer.current()->data, noisy1spp_size, cudaMemcpyDeviceToHost));
+
+			size_t features_buffer_size = features_buffer.size;
+			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.features_buffer.data(), features_buffer.data, features_buffer_size, cudaMemcpyDeviceToHost));
+
+			size_t spp_buffer_size = spp_buffer.current()->size;
+			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.spp.data(), spp_buffer.current()->data, spp_buffer_size, cudaMemcpyDeviceToHost));
+
+			size_t feature_weights_buffer_size = features_weights_buffer.size;
+			tmpData.features_weights_buffer.resize(feature_weights_buffer_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.features_weights_buffer.data(), features_weights_buffer.data, feature_weights_buffer_size, cudaMemcpyDeviceToHost));
+
+			size_t feature_min_max_buffer_size = features_min_max_buffer.size;
+			tmpData.features_min_max_buffer.resize(feature_min_max_buffer_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.features_min_max_buffer.data(), features_min_max_buffer.data, feature_min_max_buffer_size, cudaMemcpyDeviceToHost));
+
+			K_CUDA_CHECK(cudaDeviceSynchronize());
+			
+			return 0;
+		}
+		#endif
 
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 
@@ -483,7 +484,7 @@ static void bmfr()
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-		SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
+		//SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
 
 #if 1
 		// Phase III: Postprocessing
@@ -510,7 +511,7 @@ static void bmfr()
 			frame
 		);
 
-		SaveDevice3Float32ImageToDisk(*noisefree_accumulated_color_estimate.current(), TO_OUTPUTS_FOLDER("noisefree_accumulated_color_estimate_") + std::to_string(frame) + ".png");
+		//SaveDevice3Float32ImageToDisk(*noisefree_accumulated_color_estimate.current(), TO_OUTPUTS_FOLDER("noisefree_accumulated_color_estimate_") + std::to_string(frame) + ".png");
 
 		// Phase III: Temporal antialiasing
 
@@ -536,10 +537,5 @@ static void bmfr()
 		// Swap all double buffers
         std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<DeviceBuffer>::swap, std::placeholders::_1));
 	}
-}
-
-int bmfr_cuda()
-{
-	bmfr();
 	return 0;
 }

@@ -1,3 +1,5 @@
 #pragma once
 
-int bmfr_cuda();
+#include "../Common.hpp"
+
+int bmfr_cuda(TmpData & data);
