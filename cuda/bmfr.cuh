@@ -198,10 +198,12 @@ inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
 normal.x,\
 normal.y,\
 normal.z\
+
+#define USE_SCALED_FEATURES 1
 // The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
-#if 0
+#if USE_SCALED_FEATURES
 #define SCALED_FEATURE_BUFFERS \
-world_position.x,\
+,world_position.x,\
 world_position.y,\
 world_position.z,\
 world_position.x*world_position.x,\
@@ -211,9 +213,15 @@ world_position.z*world_position.z
 #define SCALED_FEATURE_BUFFERS
 #endif
 
-#define BUFFER_COUNT (4 + 3)
 #define FEATURES_NOT_SCALED 4
+
+#if USE_SCALED_FEATURES
+#define FEATURES_SCALED 6
+#else
 #define FEATURES_SCALED 0
+#endif
+
+#define BUFFER_COUNT (FEATURES_NOT_SCALED + FEATURES_SCALED + 3)
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 
@@ -296,14 +304,14 @@ extern "C" void run_accumulate_noisy_data(
 	dim3 const & block_size,
 	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
 	unsigned char* K_RESTRICT accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT current_normals,			// [in]  Current  (world) normals
+	const float * K_RESTRICT current_normals,		// [in]  Current  (world) normals
 	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
 	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
 	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
 		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
 	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
 	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
-		  unsigned char * K_RESTRICT current_spp,		// [out] Current  number of samples accumulated (for CMA)
+		  unsigned char * K_RESTRICT current_spp,	// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half * K_RESTRICT features_data,				// [out] Features buffer (half-precision)
 	#else
@@ -320,13 +328,13 @@ extern "C" void run_fitter(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	float * K_RESTRICT weights,					// [out] Features weights
-	float * K_RESTRICT mins_maxs,					// [out] Min and max of features values per block (world_positions)
+	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
 	#else
 	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 );
 
 // Weighted sum kernel /////////////////////////////////////////////////////////
@@ -335,13 +343,13 @@ extern "C" void run_fitter(
 extern "C" void run_weighted_sum(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	const float * K_RESTRICT weights,				// [in]	 Features weights computed by the fitter kernel
+	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  float * K_RESTRICT output,				// [out] Noise-free color estimate
-	const float * K_RESTRICT current_normals,		// [in]  Current (world) normals
+		  float * K_RESTRICT output,			// [out] Noise-free color estimate
+	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
 	const float * K_RESTRICT current_positions,	// [in]  Current world positions
 	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 );
 
 // Accumulate filtered data kernel /////////////////////////////////////////////
@@ -352,12 +360,12 @@ extern "C" void run_accumulate_filtered_data(
 	dim3 const & block_size,
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
-	const unsigned char * K_RESTRICT accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
-		  float * K_RESTRICT tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
+		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
 	const int frame_number								// [in]  Current frame number
 );
 
@@ -367,8 +375,8 @@ extern "C" void run_taa(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
-	const float * K_RESTRICT new_frame,			// [in]	 Current frame color buffer
-		  float * K_RESTRICT result_frame,		// [out] Antialiased frame color buffer
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
 	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
 	const int frame_number							// [in]  Current frame number
 );

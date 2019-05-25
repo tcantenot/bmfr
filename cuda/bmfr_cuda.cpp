@@ -10,7 +10,7 @@
 #define STR(x) STR_HELPER(x)
 
 // TODO detect FRAME_COUNT from the input files
-#define FRAME_COUNT 40
+#define FRAME_COUNT 1
 // Location where input frames and feature buffers are located
 #define INPUT_DATA_PATH ../data/classroom/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
@@ -30,11 +30,11 @@
 "1.f,"\
 "normal.x,"\
 "normal.y,"\
-"normal.z,"\
+"normal.z"\
 // The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
-#if 0
+#if USE_SCALED_FEATURES
 #define SCALED_FEATURE_BUFFERS_STR \
-"world_position.x,"\
+",world_position.x,"\
 "world_position.y,"\
 "world_position.z,"\
 "world_position.x*world_position.x,"\
@@ -388,6 +388,13 @@ static void bmfr()
         K_CUDA_CHECK(cudaMemcpy(positions_buffer.current()->data, frameInput.positions.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(noisy_1spp_color_buffer.current()->data, frameInput.noisy1spps.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
+		// Phase I:
+		//  - accumulate noisy 1spp
+		//  - compute previous frame pixel coordinates (after reprojection)
+		//  - generate validity bit mask of bilinear samples of previous frame
+		//  - concatenate the different features in a single buffer
+        // Note: On the first frame accum_noisy_kernel just copies to the features_buffer
+        
 		printf("  Run accumulate_noisy_data kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_with_margin_grid_size.x,
 			k_workset_with_margin_grid_size.y,
@@ -419,6 +426,7 @@ static void bmfr()
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
+#if 0
 		//run_test(k_workset_grid_size, k_block_size, noisy_1spp_color_buffer.current()->getTypedData<float>());
 		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -429,8 +437,11 @@ static void bmfr()
 		//SaveDevice3Float32ImageToDisk(*normals_buffer.current(),	TO_OUTPUTS_FOLDER("normals_buffer_") + std::to_string(frame) + ".png");
 		//SaveDevice3Float32ImageToDisk(*positions_buffer.previous(), TO_OUTPUTS_FOLDER("positions_buffer_") + std::to_string(frame) + ".png");
 		SaveDevice3Float32ImageToDisk(*noisy_1spp_color_buffer.current(),  TO_OUTPUTS_FOLDER("noisy_1spp_color_buffer_") + std::to_string(frame) + ".png");
+#endif
 
-#if 0
+		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
+		// -> compute features weights
+
 		printf("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_fitter_grid_size.x,
 			k_fitter_grid_size.y,
@@ -448,7 +459,8 @@ static void bmfr()
 		);
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
-#endif
+
+		// Phase II: Compute noise free color estimate (weighted sum of features)
 
 		printf("  Run weighted_sum kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_grid_size.x,
@@ -471,13 +483,56 @@ static void bmfr()
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-		//SaveDevice3Float32ImageToDisk(features_min_max_buffer, TO_OUTPUTS_FOLDER("features_min_max_buffer_") + std::to_string(frame) + ".png");
-		//SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
+		SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
 
-		// This is not timed because in real use case the result is stored to frame buffer
-        //K_CUDA_CHECK(cudaMemcpy(out_data[frame].data(), result_buffer.current()->data, OUTPUT_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-		//K_CUDA_CHECK(cudaDeviceSynchronize());
+#if 1
+		// Phase III: Postprocessing
+		// -> accumulate noise-free color estimate + output a tonemapped version
 
+		printf("  Run accumulate_filtered_data kernel: grid (%d, %d) | block(%d, %d)\n", 
+			k_workset_grid_size.x,
+			k_workset_grid_size.y,
+			k_block_size.x,
+			k_block_size.y
+		);
+
+		run_accumulate_filtered_data(
+			k_workset_grid_size,
+			k_block_size,
+			noisefree_color_estimate.getTypedData<float>(),
+			prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+			prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
+			albedo_buffer.getTypedData<float>(),
+			tone_mapped_buffer.getTypedData<float>(),
+			spp_buffer.current()->getTypedData<unsigned char>(),
+			noisefree_accumulated_color_estimate.previous()->getTypedData<float>(), 
+			noisefree_accumulated_color_estimate.current()->getTypedData<float>(),
+			frame
+		);
+
+		SaveDevice3Float32ImageToDisk(*noisefree_accumulated_color_estimate.current(), TO_OUTPUTS_FOLDER("noisefree_accumulated_color_estimate_") + std::to_string(frame) + ".png");
+
+		// Phase III: Temporal antialiasing
+
+		printf("  Run taa kernel: grid (%d, %d) | block(%d, %d)\n", 
+			k_workset_grid_size.x,
+			k_workset_grid_size.y,
+			k_block_size.x,
+			k_block_size.y
+		);
+
+		run_taa(
+			k_workset_grid_size,
+			k_block_size,
+			prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+			tone_mapped_buffer.getTypedData<float>(),
+			result_buffer.current()->getTypedData<float>(),
+			result_buffer.previous()->getTypedData<float>(),
+			frame
+		);
+
+		SaveDevice3Float32ImageToDisk(*result_buffer.current(), TO_OUTPUTS_FOLDER("result_") + std::to_string(frame) + ".png");
+#endif
 		// Swap all double buffers
         std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<DeviceBuffer>::swap, std::placeholders::_1));
 	}

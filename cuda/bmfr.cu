@@ -1,4 +1,3 @@
-#if 1
 #include "bmfr.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -717,13 +716,13 @@ extern "C" void run_accumulate_noisy_data(
 // Block size: (256, 1, 1)
 __global__ void fitter(
 	float * K_RESTRICT weights,					// [out] Features weights
-	float * K_RESTRICT mins_maxs,					// [out] Min and max of features values per block (world_positions)
+	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
 	#else
 	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 )
 {
 	// Notes:
@@ -949,7 +948,7 @@ __global__ void fitter(
 			for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
 			{
 				const int index = id + sub_vector * LOCAL_SIZE;
-				if (index >= col_limited)
+				if(index >= col_limited)
 				{
 					#if CACHE_TMP_DATA
 					float store_value = tmp_data_private_cache[sub_vector];
@@ -1054,13 +1053,13 @@ extern "C" void run_fitter(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	float * K_RESTRICT weights,					// [out] Features weights
-	float * K_RESTRICT mins_maxs,					// [out] Min and max of features values per block (world_positions)
+	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
 	#else
 	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 )
 {
 	fitter<<<grid_size, block_size>>>(
@@ -1075,13 +1074,13 @@ extern "C" void run_fitter(
 // -> outputs the noise-free 1spp color estimate
 
 __global__ void weighted_sum(
-	const float * K_RESTRICT weights,				// [in]	 Features weights computed by the fitter kernel
+	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  float * K_RESTRICT output,				// [out] Noise-free color estimate
-	const float * K_RESTRICT current_normals,		// [in]  Current (world) normals
+		  float * K_RESTRICT output,			// [out] Noise-free color estimate
+	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
 	const float * K_RESTRICT current_positions,	// [in]  Current world positions
 	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 )
 {
 	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
@@ -1092,9 +1091,6 @@ __global__ void weighted_sum(
 
 	// Linear pixel index
 	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
-
-	store_float3(output, linear_pixel, vec3(0.f, 1.f, 0.f));
-	return;
 
 	// Load weights and min_max which this pixel should use.
 	const ivec2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly 'frame_number%BLOCK_OFFSETS_COUNT'
@@ -1134,7 +1130,7 @@ __global__ void weighted_sum(
 	}
 
 	// Remove negative values from every component of the fitting results
-	color = vec3(1.f, 0.f, 1.f);//Max(vec3(0.f), color);
+	color = Max(vec3(0.f), color);
 
 	// !!!!!
 	// Uncomment this for debugging. Removes fitting completely.
@@ -1176,12 +1172,12 @@ extern "C" void run_weighted_sum(
 __global__ void accumulate_filtered_data(
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
-	const unsigned char * K_RESTRICT accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
-		  float * K_RESTRICT tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
+		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
 	const int frame_number								// [in]  Current frame number
 )
 {
@@ -1216,8 +1212,14 @@ __global__ void accumulate_filtered_data(
 			const ivec2 prev_frame_pixel_i = FloatToIntRn(prev_frame_pixel_f);
 
 			// Compute bilinear weights for bilinear sampling
-			const vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
-			const vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+			vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+			// /!\ We need to saturate here because otherwise the sum of the weights isn't equal to 1
+			// TODO: try to use Fract
+			prev_pixel_fract.x = Clamp(prev_pixel_fract.x, 0.f, 1.f); // Saturate
+			prev_pixel_fract.y = Clamp(prev_pixel_fract.y, 0.f, 1.f); // Saturate
+			vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+			//one_minus_prev_pixel_fract.x = Clamp(one_minus_prev_pixel_fract.x, 0.f, 1.f); // Saturate
+			//one_minus_prev_pixel_fract.y = Clamp(one_minus_prev_pixel_fract.y, 0.f, 1.f); // Saturate
 			
 			float total_weight = 0.f;
 
@@ -1252,6 +1254,7 @@ __global__ void accumulate_filtered_data(
 				float weight = prev_pixel_fract.x * prev_pixel_fract.y;
 				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+				total_weight += weight;
 			}
 
 			if(total_weight > 0.f)
@@ -1293,12 +1296,12 @@ extern "C" void run_accumulate_filtered_data(
 	dim3 const & block_size,
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
-	const unsigned char * K_RESTRICT accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
-		  float * K_RESTRICT tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
+		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
 	const int frame_number								// [in]  Current frame number
 )
 {
@@ -1322,8 +1325,8 @@ extern "C" void run_accumulate_filtered_data(
 // - optimize with local/shared memory
 __global__ void taa(
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
-	const float * K_RESTRICT new_frame,			// [in]	 Current frame color buffer
-		  float * K_RESTRICT result_frame,		// [out] Antialiased frame color buffer
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
 	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
 	const int frame_number							// [in]  Current frame number
 )
@@ -1447,8 +1450,8 @@ extern "C" void run_taa(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
-	const float * K_RESTRICT new_frame,			// [in]	 Current frame color buffer
-		  float * K_RESTRICT result_frame,		// [out] Antialiased frame color buffer
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
 	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
 	const int frame_number							// [in]  Current frame number
 )
@@ -1461,78 +1464,3 @@ extern "C" void run_taa(
 		frame_number
 	);
 }
-
-
-////////////////////////////////////////////////////////////////////////////////
-
-#endif
-#include <stdio.h>
-
-__global__ void cuda_hello()
-{
-    printf("Hello World from GPU: thread: %d!\n", threadIdx.x);
-}
-
-extern "C" void run_cuda_hello()
-{
-	cuda_hello<<<1, 5>>>();
-	cudaDeviceSynchronize();
-}
-
-#if 0
-
-#include <stdio.h>
-//#include <assert.h>
-//#include <cuda.h>
-//#include <cuda_runtime.h>
-
-
-#ifndef __NVCC__
-#include <iostream>
-#endif
-
-__global__ void test(){
-    printf("Hi Cuda World\n");
-}
-
-int main( int argc, char** argv )
-{
-	cudaError_t ret = cudaSuccess;
-	
-#if 0
-	int driverVersion = 0;
-	ret = cudaDriverGetVersion(&driverVersion);
-	assert(ret == cudaSuccess);
-
-	int runtimeVersion = 0;
-	ret = cudaRuntimeGetVersion(&runtimeVersion);
-	assert(ret == cudaSuccess);
-
-	if(runtimeVersion > driverVersion)
-	{
-		printf("Error: CUDA runtime driver (%d) is newer than the driver version (%d)", runtimeVersion, driverVersion);
-		return 1;
-	}
-
-	size_t prinfFIFOSize = 0;
-	ret = cudaDeviceGetLimit(&prinfFIFOSize,cudaLimitPrintfFifoSize);
-	assert(ret == cudaSuccess);
-#endif
-
-	printf ("Before kernel\n");
-    test<<<1,1>>>();
-    ret = cudaDeviceSynchronize();
-#if 0
-	run_cuda_hello();
-    ret = cudaDeviceSynchronize();
-#endif
-	printf ("After kernel\n");
-
-	#ifndef __NVCC__
-	char wait;
-	std::cin >> wait;
-	#endif
-
-    return 0;
-}
-#endif
