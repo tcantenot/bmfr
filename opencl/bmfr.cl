@@ -1044,6 +1044,7 @@ __kernel void accumulate_filtered_data(
 				float weight = prev_pixel_fract.x * prev_pixel_fract.y;
 				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+				total_weight += weight;
 			}
 
 			if(total_weight > 0.f)

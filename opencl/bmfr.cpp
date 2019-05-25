@@ -33,11 +33,13 @@
 #define STR(x) STR_HELPER(x)
 
 // ### Choose your OpenCL device and platform with these defines ###
-#define PLATFORM_INDEX 0
+#define PLATFORM_INDEX 1
 #define DEVICE_INDEX 0
 
 
 // ### Edit these defines if you have different input ###
+
+#define KERNEL_FILENAME "bmfr.cl"
 
 // TODO: turn size and dependent constants into variables (that will be baked as constant inside the kernel)
 
@@ -171,6 +173,7 @@ class Double_buffer
         bool swapped;
 
     public:
+		Double_buffer(T aa, T bb): a(aa), b(bb) { }
         template <typename... Args>
         Double_buffer(Args... args) : a(args...), b(args...), swapped(false){};
         T *current() { return swapped ? &a : &b; }
@@ -639,4 +642,693 @@ int bmfr_opencl()
     }
 
     return 0;
+}
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+ 
+#ifdef __APPLE__
+#include <OpenCL/opencl.h>
+#else
+#include <CL/cl.h>
+#endif
+ 
+#define MAX_SOURCE_SIZE (0x100000)
+
+int bmfr_c_opencl()
+{
+    printf("Initialize.\n");
+
+	// Based on: https://gist.github.com/courtneyfaulkner/7919509
+	{
+		int i, j;
+		char* info;
+		size_t infoSize;
+		char* value;
+		size_t valueSize;
+		cl_uint platformCount;
+		cl_platform_id* platforms;
+		cl_uint deviceCount;
+		cl_device_id* devices;
+		cl_uint maxComputeUnits;
+		const char* attributeNames[5] = { "Name", "Vendor", "Version", "Profile", "Extensions" };
+		const cl_platform_info attributeTypes[5] = { CL_PLATFORM_NAME, CL_PLATFORM_VENDOR, CL_PLATFORM_VERSION, CL_PLATFORM_PROFILE, CL_PLATFORM_EXTENSIONS };
+		const int attributeCount = sizeof(attributeNames) / sizeof(char*);
+
+		// get all platforms
+		clGetPlatformIDs(5, NULL, &platformCount);
+		platforms = (cl_platform_id*) malloc(sizeof(cl_platform_id) * platformCount);
+		clGetPlatformIDs(platformCount, platforms, NULL);
+
+		for (i = 0; i < platformCount; i++)
+		{
+			printf("\n %d. Platform \n", i+1);
+
+			for (j = 0; j < attributeCount; j++) {
+
+				// get platform attribute value size
+				clGetPlatformInfo(platforms[i], attributeTypes[j], 0, NULL, &infoSize);
+				info = (char*) malloc(infoSize);
+
+				// get platform attribute value
+				clGetPlatformInfo(platforms[i], attributeTypes[j], infoSize, info, NULL);
+
+				printf("  %d.%d %-11s: %s\n", i+1, j+1, attributeNames[j], info);
+				free(info);
+			}
+
+			printf("\n");
+
+			// get all devices
+			clGetDeviceIDs(platforms[i], CL_DEVICE_TYPE_ALL, 0, NULL, &deviceCount);
+			devices = (cl_device_id*) malloc(sizeof(cl_device_id) * deviceCount);
+			clGetDeviceIDs(platforms[i], CL_DEVICE_TYPE_ALL, deviceCount, devices, NULL);
+
+			// for each device print critical attributes
+			for (j = 0; j < deviceCount; j++) {
+
+				// print device name
+				clGetDeviceInfo(devices[j], CL_DEVICE_NAME, 0, NULL, &valueSize);
+				value = (char*) malloc(valueSize);
+				clGetDeviceInfo(devices[j], CL_DEVICE_NAME, valueSize, value, NULL);
+				printf("%d. Device: %s\n", j+1, value);
+				free(value);
+
+				// print hardware device version
+				clGetDeviceInfo(devices[j], CL_DEVICE_VERSION, 0, NULL, &valueSize);
+				value = (char*) malloc(valueSize);
+				clGetDeviceInfo(devices[j], CL_DEVICE_VERSION, valueSize, value, NULL);
+				printf(" %d.%d Hardware version: %s\n", j+1, 1, value);
+				free(value);
+
+				// print software driver version
+				clGetDeviceInfo(devices[j], CL_DRIVER_VERSION, 0, NULL, &valueSize);
+				value = (char*) malloc(valueSize);
+				clGetDeviceInfo(devices[j], CL_DRIVER_VERSION, valueSize, value, NULL);
+				printf(" %d.%d Software version: %s\n", j+1, 2, value);
+				free(value);
+
+				// print c version supported by compiler for device
+				clGetDeviceInfo(devices[j], CL_DEVICE_OPENCL_C_VERSION, 0, NULL, &valueSize);
+				value = (char*) malloc(valueSize);
+				clGetDeviceInfo(devices[j], CL_DEVICE_OPENCL_C_VERSION, valueSize, value, NULL);
+				printf(" %d.%d OpenCL C version: %s\n", j+1, 3, value);
+				free(value);
+
+				// print parallel compute units
+				clGetDeviceInfo(devices[j], CL_DEVICE_MAX_COMPUTE_UNITS,
+						sizeof(maxComputeUnits), &maxComputeUnits, NULL);
+				printf(" %d.%d Parallel compute units: %d\n", j+1, 4, maxComputeUnits);
+
+			}
+
+			free(devices);
+
+		}
+
+		free(platforms);
+	}
+
+#if 1
+	cl_device_id device_id = NULL;
+	cl_uint ret_num_devices;
+	cl_uint ret_num_platforms;
+	cl_int ret = clGetPlatformIDs(0, NULL, &ret_num_platforms);
+	cl_platform_id *platforms = NULL;
+	platforms = (cl_platform_id*)malloc(ret_num_platforms*sizeof(cl_platform_id));
+	ret = clGetPlatformIDs(ret_num_platforms, platforms, NULL);
+	assert(ret == CL_SUCCESS);
+	ret = clGetDeviceIDs(platforms[1], CL_DEVICE_TYPE_ALL, 1, &device_id, &ret_num_devices);
+	assert(ret == CL_SUCCESS);
+	
+	// Print device name
+	char* value;
+    size_t valueSize;
+    clGetDeviceInfo(device_id, CL_DEVICE_NAME, 0, NULL, &valueSize);
+    value = (char*) malloc(valueSize);
+    clGetDeviceInfo(device_id, CL_DEVICE_NAME, valueSize, value, NULL);
+    printf("\nSelected device: %s\n", value);
+    free(value);
+	free(platforms);
+	platforms = nullptr;
+#else
+	// Get platform and device information
+    cl_platform_id platform_id = NULL;
+    cl_device_id device_id = NULL;   
+    cl_uint ret_num_devices;
+    cl_uint ret_num_platforms;
+    cl_int ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
+	assert(ret == CL_SUCCESS);
+    
+	ret = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1, &device_id, &ret_num_devices);
+	assert(ret == CL_SUCCESS);
+
+	// Print device name
+    size_t valueSize;
+    clGetDeviceInfo(device_id, CL_DEVICE_NAME, 0, NULL, &valueSize);
+    char * value = (char*) malloc(valueSize);
+    clGetDeviceInfo(device_id, CL_DEVICE_NAME, valueSize, value, NULL);
+    printf("Selected device: %s\n", value);
+    free(value);
+#endif
+
+	// Create an OpenCL context
+	cl_context context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
+ 
+	// Create a command queue
+	cl_command_queue command_queue = clCreateCommandQueue(context, device_id, 0, &ret);
+ 
+
+	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
+	std::string features_scaled(SCALED_FEATURE_BUFFERS);
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
+	// + 1 because last one does not have ',' after it.
+	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
+	// + 3 stands for three noisy spp color channels.
+	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
+
+	// Create and build the kernel
+	std::stringstream build_options;
+	build_options <<
+		" -D BUFFER_COUNT=" << buffer_count <<
+		" -D FEATURES_NOT_SCALED=" << features_not_scaled_count <<
+		" -D FEATURES_SCALED=" << features_scaled_count <<
+		" -D IMAGE_WIDTH=" << IMAGE_WIDTH <<
+		" -D IMAGE_HEIGHT=" << IMAGE_HEIGHT <<
+		" -D WORKSET_WIDTH=" << WORKSET_WIDTH <<
+		" -D WORKSET_HEIGHT=" << WORKSET_HEIGHT <<
+		" -D FEATURE_BUFFERS=" << NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS <<
+		" -D LOCAL_WIDTH=" << LOCAL_WIDTH <<
+		" -D LOCAL_HEIGHT=" << LOCAL_HEIGHT <<
+		" -D WORKSET_WITH_MARGINS_WIDTH=" << WORKSET_WITH_MARGINS_WIDTH <<
+		" -D WORKSET_WITH_MARGINS_HEIGHT=" << WORKSET_WITH_MARGINS_HEIGHT <<
+		" -D BLOCK_EDGE_LENGTH=" << STR(BLOCK_EDGE_LENGTH) <<
+		" -D BLOCK_PIXELS=" << BLOCK_PIXELS <<
+		" -D R_EDGE=" << buffer_count - 2 <<
+		" -D NOISE_AMOUNT=" << STR(NOISE_AMOUNT) <<
+		" -D BLEND_ALPHA=" << STR(BLEND_ALPHA) <<
+		" -D SECOND_BLEND_ALPHA=" << STR(SECOND_BLEND_ALPHA) <<
+		" -D TAA_BLEND_ALPHA=" << STR(TAA_BLEND_ALPHA) <<
+		" -D POSITION_LIMIT_SQUARED=" << position_limit_squared <<
+		" -D NORMAL_LIMIT_SQUARED=" << normal_limit_squared <<
+		" -D COMPRESSED_R=" << STR(COMPRESSED_R) <<
+		" -D CACHE_TMP_DATA=" << STR(CACHE_TMP_DATA) <<
+		" -D ADD_REQD_WG_SIZE=" << STR(ADD_REQD_WG_SIZE) <<
+		" -D LOCAL_SIZE=" << STR(LOCAL_SIZE) <<
+		" -D USE_HALF_PRECISION_IN_FEATURES_DATA=" << STR(USE_HALF_PRECISION_IN_FEATURES_DATA);
+
+	// Load the kernel source code into the array source_str
+	FILE *fp;
+	char *source_str;
+	size_t source_size;
+ 
+	fp = fopen(KERNEL_FILENAME, "r");
+	if(!fp)
+	{
+		fprintf(stderr, "Failed to load kernel.\n");
+		exit(1);
+	}
+    
+	char * file_content = (char*)malloc(MAX_SOURCE_SIZE);
+
+	source_str  = (char*)malloc(MAX_SOURCE_SIZE);
+	source_size = fread(source_str, 1, MAX_SOURCE_SIZE, fp);
+	fclose(fp);
+
+	// Create a program from the kernel source
+	cl_program program = clCreateProgramWithSource(context, 1, (const char **)&source_str, (const size_t *)&source_size, &ret);
+
+	// Build the program
+	ret = clBuildProgram(program, 1, &device_id, build_options.str().c_str(), NULL, NULL);
+
+	if(ret != CL_SUCCESS)
+	{
+		size_t len = 0;
+		clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &len);
+		char *buffer = (char*)malloc(len * sizeof(char));
+		clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, len, buffer, NULL);
+
+		printf("Compilation failed: %s\n", buffer);
+	}
+
+	assert(ret == CL_SUCCESS);
+
+	// Phase I
+	// 3.2 Preprocessing: temporal accumulation of the noisy 1 spp data, which reprojects the previous accumulated data to the new camera frame
+	//cl::Kernel &accum_noisy_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_noisy_data", build_options.str().c_str()));
+	cl_kernel accum_noisy_kernel = clCreateKernel(program, "accumulate_noisy_data", &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Phase II: feature fitting phase
+	// 3.3 Blockwise Multi-Order Feature Regression (BMFR)
+	// 3.4 Feature Fitting with Stochastic Regularization
+	//cl::Kernel &fitter_kernel(clEnv.addProgram(0, "bmfr.cl", "fitter", build_options.str().c_str()));
+	cl_kernel fitter_kernel = clCreateKernel(program, "fitter", &ret);
+	assert(ret == CL_SUCCESS);
+
+	//cl::Kernel &weighted_sum_kernel(clEnv.addProgram(0, "bmfr.cl", "weighted_sum", build_options.str().c_str()));
+	cl_kernel weighted_sum_kernel = clCreateKernel(program, "weighted_sum", &ret);
+	assert(ret == CL_SUCCESS);
+
+	//cl::Kernel &accum_filtered_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_filtered_data", build_options.str().c_str()));
+	cl_kernel accum_filtered_kernel = clCreateKernel(program, "accumulate_filtered_data", &ret);
+	assert(ret == CL_SUCCESS);
+
+	//cl::Kernel &taa_kernel(clEnv.addProgram(0, "bmfr.cl", "taa", build_options.str().c_str()));
+	cl_kernel taa_kernel = clCreateKernel(program, "taa", &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Load input data arrays from disk to host memory
+	printf("Loading input data.\n");
+	std::vector<cl_float> out_data[FRAME_COUNT];
+	std::vector<cl_float> albedos[FRAME_COUNT];
+	std::vector<cl_float> normals[FRAME_COUNT];
+	std::vector<cl_float> positions[FRAME_COUNT];
+	std::vector<cl_float> noisy_input[FRAME_COUNT];
+	bool error = false;
+	#pragma omp parallel for
+	for(int frame = 0; frame < FRAME_COUNT; ++frame)
+	{
+		if(error)
+			continue;
+
+		out_data[frame].resize(3 * OUTPUT_SIZE);
+
+		albedos[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+		Operation_result result = load_image(albedos[frame].data(), ALBEDO_FILE_NAME,
+			frame);
+		if(!result.success)
+		{
+			error = true;
+			printf("Albedo buffer loading failed, reason: %s\n",
+					result.error_message.c_str());
+			continue;
+		}
+
+		normals[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+		result = load_image(normals[frame].data(), NORMAL_FILE_NAME, frame);
+		if(!result.success)
+		{
+			error = true;
+			printf("Normal buffer loading failed, reason: %s\n",
+					result.error_message.c_str());
+			continue;
+		}
+
+		positions[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+		result = load_image(positions[frame].data(), POSITION_FILE_NAME, frame);
+		if(!result.success)
+		{
+			error = true;
+			printf("Position buffer loading failed, reason: %s\n",
+					result.error_message.c_str());
+			continue;
+		}
+
+		noisy_input[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+		result = load_image(noisy_input[frame].data(), NOISY_FILE_NAME, frame);
+		if(!result.success)
+		{
+			error = true;
+			printf("Position buffer loading failed, reason: %s\n",
+					result.error_message.c_str());
+			continue;
+		}
+	}
+
+	if(error)
+	{
+		printf("One or more errors occurred during buffer loading\n");
+		return 1;
+	}
+
+	// Create OpenCL buffers
+
+	const auto CreateDoubleBuffer = [](cl_context c, cl_mem_flags f, size_t s) -> Double_buffer<cl_mem>
+	{
+		cl_int ret;
+		cl_mem b0 = clCreateBuffer(c, f, s, nullptr, &ret);
+		assert(ret == CL_SUCCESS);
+		cl_mem b1 = clCreateBuffer(c, f, s, nullptr, &ret);
+		assert(ret == CL_SUCCESS);
+		return Double_buffer<cl_mem>(b0, b1);
+	};
+
+	const auto FreeDoubleBuffer = [](Double_buffer<cl_mem> & buffer)
+	{
+		cl_int ret;
+		ret = clReleaseMemObject(*buffer.previous());
+		assert(ret == CL_SUCCESS);
+		ret = clReleaseMemObject(*buffer.current());
+		assert(ret == CL_SUCCESS);
+	};
+
+	// (World) normals buffers (3 * float32) in [-1, +1]^3
+	// TODO: compress data? half? -> would require different storage than feature buffer
+	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// World positions buffer (3 * float32)
+	// TODO: normalize in [0, 1] (or [-1, +1])
+	Double_buffer<cl_mem> positions_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    
+	// Noisy 1spp color buffer (3 * float32)
+	Double_buffer<cl_mem> noisy_1spp_color_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// Features buffer size
+	size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
+
+	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
+	cl_mem features_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size, nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Noise-free color estimate (3 * float32)
+	cl_mem noisefree_color_estimate = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// TODO: why does the size of this buffer is WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT and not WORKSET_WIDTH x WORKSET_HEIGHT?
+	// -> it seems we are not writing/reading in the part of the buffer that is outside of image (because of offsets)
+	// (see kernel 'accumulate_filtered_data' that is the only kernel using it)
+	// --> should have the same size as 'tone_mapped_buffer'
+	// Noise-free accumulated color estimate (3 * float32)
+	Double_buffer<cl_mem> noisefree_accumulated_color_estimate = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
+
+	// Final antialiased color buffer (3 * float32)
+	Double_buffer<cl_mem> result_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+
+	// Previous frame pixel coordinates (after reprojection) (2 * float32)
+	cl_mem prev_frame_pixel_coords_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
+	cl_mem prev_frame_bilinear_samples_validity_mask = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Albedo buffer (3 * float32) // TODO: compress this
+	cl_mem albedo_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
+	cl_mem tone_mapped_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
+	//cl_mem features_weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
+	cl_mem features_weights_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(cl_float), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Min and max of features values per block (world_positions) (6 * 2 * float32)
+	//cl_mem features_min_max_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * 6 * sizeof(cl_float2));
+	cl_mem features_min_max_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2), nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
+	// Number of samples accumulated (for cumulative moving average) (char 8bits)
+	Double_buffer<cl_mem> spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_char));
+
+	std::vector<Double_buffer<cl_mem> *> all_double_buffers =
+	{
+		&normals_buffer,
+		&positions_buffer,
+		&noisy_1spp_color_buffer,
+		&noisefree_accumulated_color_estimate,
+		&result_buffer,
+		&spp_buffer
+	};
+
+
+		// Set kernel arguments
+	int arg_index = 0;
+	ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_pixel_coords_buffer); // [out] Previous frame pixel coordinates (after reprojection)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_bilinear_samples_validity_mask);	// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
+	assert(ret == CL_SUCCESS);
+
+	arg_index = 0;
+	
+	#if COMPRESSED_R
+	// TODO: replace 'buffer_count-2'
+	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy 1spp color channels inputs.
+	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input with makes a size of 'buffer_count-2'.
+	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
+	// See section 3.3 and 3.4.
+
+	// Computed via sum of arithmetic sequence (that for the upper right triangle):
+	//    0  1  2  3  4  5 x
+	// 0 00 01 02 03 04 05
+	// 1  - 11 12 13 14 15
+	// 2  -  - 22 23 24 25
+	// 3  -  -  - 33 34 35
+	// 4  -  -  -  - 44 45
+	// 5  -  -  -  -  - 55
+	// y
+	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
+	const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
+	#else
+	const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(cl_float3);
+	#endif
+
+	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
+	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
+
+	ret = clSetKernelArg(fitter_kernel, arg_index++, LOCAL_SIZE * sizeof(float), nullptr);		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(fitter_kernel, arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);	// [local] Shared memory used to store the 'u' vectors
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(fitter_kernel, arg_index++, r_size, nullptr);							// [local] Shared memory used to store the R matrix of the QR factorization
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer);					// [out]   Features weights
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer);					// [out]   Min and max of features values per block (world_positions)
+	assert(ret == CL_SUCCESS);
+
+	arg_index = 0;
+	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer);	// [in]	 Features weights computed by the fitter kernel
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer);	// [in]  Min and max of features values per block (world_positions)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &noisefree_color_estimate);	// [out] Noise-free color estimate
+	assert(ret == CL_SUCCESS);
+
+	arg_index = 0;
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_color_estimate);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);				// [in]  Previous frame pixel coordinates (after reprojection)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_bilinear_samples_validity_mask);	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &albedo_buffer);								// [in]  Albedo buffer of the current frame (non-noisy)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &tone_mapped_buffer);							// [out] Accumulated and tonemapped noise-free color estimate
+	assert(ret == CL_SUCCESS);
+
+	arg_index = 0;
+	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);	// [in] Previous frame pixel coordinates (after reprojection)
+	assert(ret == CL_SUCCESS);
+	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &tone_mapped_buffer);				// [in]	Current frame color buffer
+	assert(ret == CL_SUCCESS);
+
+	printf("Run and profile kernels.\n");
+
+	// Note: enqueueNDRangeKernel takes in the global_size and the local_size.
+	// In CUDA, a dispatch takes in the grid_size and the block_size.
+	// The correspondance is as follow:
+	//	global_size = grid_size * block_size
+	//	local_size = block_size
+
+	size_t k_workset_with_margin_global_size[] = { WORKSET_WITH_MARGINS_WIDTH, WORKSET_WITH_MARGINS_HEIGHT };
+	size_t k_workset_global_size[] = { WORKSET_WIDTH, WORKSET_HEIGHT };
+	size_t k_local_size[] = { LOCAL_WIDTH, LOCAL_HEIGHT };
+	size_t k_fitter_global_size[] = { FITTER_KERNEL_GLOBAL_RANGE };
+	size_t k_fitter_local_size[] = { LOCAL_SIZE };
+
+	// Note: in real use case there would not be WriteBuffer and ReadBuffer function calls
+	// because the input data comes from the path tracer and output goes to the screen
+	for(int frame = 0; frame < FRAME_COUNT; ++frame)
+	{
+		const cl_bool blocking_write = true;
+		// https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/clEnqueueWriteBuffer.html
+		// Enqueue commands to write to a buffer object from host memory (= cudaMemcpy(..., cudaMemcpyHostToDevice))
+		ret = clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), albedos[frame].data(), 0, nullptr, nullptr);
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), normals[frame].data(), 0, nullptr, nullptr);
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), positions[frame].data(), 0, nullptr, nullptr);
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueWriteBuffer(command_queue, *noisy_1spp_color_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), noisy_input[frame].data(), 0, nullptr, nullptr);
+		assert(ret == CL_SUCCESS);
+
+		// Phase I:
+		//  - accumulate noisy 1spp
+		//  - compute previous frame pixel coordinates (after reprojection)
+		//  - generate validity bit mask of bilinear samples of previous frame
+		//  - concatenate the different features in a single buffer
+		// Note: On the first frame accum_noisy_kernel just copies to the features_buffer
+		arg_index = 2;
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current());			// [in]  Current  (world) normals
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.previous());			// [in]  Previous (world) normals
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current());		// [in]  Current  world positions
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.previous());		// [in]  Previous world positions
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.current());	// [out] Current  noisy 1spp color
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.previous());// [in]  Previous noisy 1spp color
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current());				// [out] Current  number of samples accumulated (for CMA)
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), &features_buffer);					// [out] Features buffer (half or single-precision)
+		assert(ret == CL_SUCCESS);
+		const int matrix_index = frame == 0 ? 0 : frame - 1;
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0])); // [in] ViewProj matrix of previous frame
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0]));
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_int), &frame); // [in] Current frame number
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+ 
+
+		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
+		// -> compute features weightss
+		arg_index = 5;
+		ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_buffer);			// [in] Features buffer (half or single-precision)
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_int), &frame);  // [in] Current frame number
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+
+		// Phase II: Compute noise free color estimate (weighted sum of features)
+		arg_index = 3;
+		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current());			 // [in] Current (world) normals
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current());		 // [in] Current world positions
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame);			 // [in] Current frame number
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueNDRangeKernel(command_queue, weighted_sum_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+
+		// Phase III: Postprocessing
+		// -> accumulate noise-free color estimate + output a tonemapped version
+		arg_index = 5;
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_accumulated_color_estimate.previous()); // [in]  Previous frame noise-free accumulated color estimate 
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_accumulated_color_estimate.current());	 // [out] Current frame noise-free accumulated color estimate
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueNDRangeKernel(command_queue, accum_filtered_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+
+		// Phase III: Temporal antialiasing
+		arg_index = 2;
+		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.current());	// [out] Antialiased frame color buffer
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.previous());	// [in]  Previous frame color buffer
+		assert(ret == CL_SUCCESS);
+		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
+		assert(ret == CL_SUCCESS);
+		ret = clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+
+		// This is not timed because in real use case the result is stored to frame buffer
+		ret = clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, OUTPUT_SIZE * 3 * sizeof(cl_float), out_data[frame].data(), 0, NULL, NULL);
+		assert(ret == CL_SUCCESS);
+
+		// Swap all double buffers
+		std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<cl_mem>::swap, std::placeholders::_1));
+	}
+    
+	// Clean up
+	ret = clFlush(command_queue);
+	assert(ret == CL_SUCCESS);
+	ret = clFinish(command_queue);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseKernel(accum_noisy_kernel);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseKernel(fitter_kernel);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseKernel(weighted_sum_kernel);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseKernel(accum_filtered_kernel);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseKernel(taa_kernel);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseProgram(program);
+	assert(ret == CL_SUCCESS);
+	FreeDoubleBuffer(normals_buffer);
+	FreeDoubleBuffer(positions_buffer);
+	FreeDoubleBuffer(noisy_1spp_color_buffer);
+	ret = clReleaseMemObject(features_buffer);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(noisefree_color_estimate);
+	assert(ret == CL_SUCCESS);
+	FreeDoubleBuffer(noisefree_accumulated_color_estimate);
+	FreeDoubleBuffer(result_buffer);
+	ret = clReleaseMemObject(prev_frame_pixel_coords_buffer);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(prev_frame_bilinear_samples_validity_mask);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(albedo_buffer);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(tone_mapped_buffer);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(features_weights_buffer);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseMemObject(features_min_max_buffer);
+	assert(ret == CL_SUCCESS);
+	FreeDoubleBuffer(spp_buffer);
+	ret = clReleaseCommandQueue(command_queue);
+	assert(ret == CL_SUCCESS);
+	ret = clReleaseContext(context);
+	assert(ret == CL_SUCCESS);
+
+	// Store results
+	error = false;
+	#pragma omp parallel for
+	for(int frame = 0; frame < FRAME_COUNT; ++frame)
+	{
+		if(error)
+			continue;
+
+		// Output image
+		std::string output_file_name = OUTPUT_FILE_NAME + std::to_string(frame) + "_new.png";
+		// Crops back from WORKSET_SIZE to IMAGE_SIZE
+		OpenImageIO::ImageSpec spec(IMAGE_WIDTH, IMAGE_HEIGHT, 3,
+									OpenImageIO::TypeDesc::FLOAT);
+		std::unique_ptr<OpenImageIO::ImageOutput>
+			out(OpenImageIO::ImageOutput::create(output_file_name));
+		if(out && out->open(output_file_name, spec))
+		{
+			out->write_image(OpenImageIO::TypeDesc::FLOAT, out_data[frame].data(),
+								3 * sizeof(cl_float), WORKSET_WIDTH * 3 * sizeof(cl_float), 0);
+			out->close();
+		}
+		else
+		{
+			printf("Can't create image file on disk to location %s\n",
+					output_file_name.c_str());
+			error = true;
+			continue;
+		}
+	}
+
+	if(error)
+	{
+		printf("One or more errors occurred during image saving\n");
+		return 1;
+	}
+
+	return 0;
 }
