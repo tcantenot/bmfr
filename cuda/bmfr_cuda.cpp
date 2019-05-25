@@ -1,18 +1,16 @@
-
 #include "bmfr_cuda.hpp"
 #include "bmfr.cuh"
 
 #include "OpenImageIO/imageio.h"
 #include <functional>
 #include <memory>
-#include <fstream>
 
 #define _CRT_SECURE_NO_WARNINGS
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 
 // TODO detect FRAME_COUNT from the input files
-#define FRAME_COUNT 1
+#define FRAME_COUNT 40
 // Location where input frames and feature buffers are located
 #define INPUT_DATA_PATH ../data/classroom/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
@@ -152,70 +150,59 @@ static void bmfr()
     const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
 	// Load input data arrays from disk to host memory
-	printf("Loading input data.\n");
-	std::vector<float> out_data[FRAME_COUNT];
-	std::vector<float> albedos[FRAME_COUNT];
-	std::vector<float> normals[FRAME_COUNT];
-	std::vector<float> positions[FRAME_COUNT];
-	std::vector<float> noisy_input[FRAME_COUNT];
-	bool error = false;
-	#pragma omp parallel for
-    for(int frame = 0; frame < FRAME_COUNT; ++frame)
-    {
-        if(error)
-            continue;
 
+	struct FrameInputData
+	{
+		std::vector<float> albedos;
+		std::vector<float> normals;
+		std::vector<float> positions;
+		std::vector<float> noisy1spps;
+	} frameInput;
+
+	std::vector<float> result;
+    result.resize(3 * OUTPUT_SIZE);
+
+	// Allocate frame input data buffers
+    frameInput.albedos.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+    frameInput.normals.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+    frameInput.positions.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+    frameInput.noisy1spps.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
+
+	const auto LoadFrameInputData = [](FrameInputData & frameInputData, int frame) -> bool
+	{
 		printf("  Loading data of frame %d\n", frame);
 
-        out_data[frame].resize(3 * OUTPUT_SIZE);
-
-        albedos[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-        Operation_result result = load_image(albedos[frame].data(), ALBEDO_FILE_NAME,
-            frame);
+        Operation_result result = load_image(frameInputData.albedos.data(), ALBEDO_FILE_NAME, frame);
         if(!result.success)
         {
-            error = true;
-            printf("Albedo buffer loading failed, reason: %s\n",
-                   result.error_message.c_str());
-            continue;
+            printf("Albedo buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            return false;
         }
 
-        normals[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-        result = load_image(normals[frame].data(), NORMAL_FILE_NAME, frame);
+        result = load_image(frameInputData.normals.data(), NORMAL_FILE_NAME, frame);
         if(!result.success)
         {
-            error = true;
-            printf("Normal buffer loading failed, reason: %s\n",
-                   result.error_message.c_str());
-            continue;
+            printf("Normal buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            return false;
         }
 
-        positions[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-        result = load_image(positions[frame].data(), POSITION_FILE_NAME, frame);
+        result = load_image(frameInputData.positions.data(), POSITION_FILE_NAME, frame);
         if(!result.success)
         {
-            error = true;
-            printf("Position buffer loading failed, reason: %s\n",
-                   result.error_message.c_str());
-            continue;
+            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            return false;
         }
 
-        noisy_input[frame].resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-        result = load_image(noisy_input[frame].data(), NOISY_FILE_NAME, frame);
+        result = load_image(frameInputData.noisy1spps.data(), NOISY_FILE_NAME, frame);
         if(!result.success)
         {
-            error = true;
-            printf("Position buffer loading failed, reason: %s\n",
-                   result.error_message.c_str());
-            continue;
+            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            return false;
         }
-    }
+            
+		return true;
+	};
 
-    if(error)
-    {
-        printf("One or more errors occurred during buffer loading\n");
-        return;
-    }
 
 	printf("Done loading data.\n");
 
@@ -331,9 +318,10 @@ static void bmfr()
 	// Only work with 3 channels float32 image
 	const auto SaveDevice3Float32ImageToDisk = [](DeviceBuffer const & buffer, std::string const & output_file_name)
 	{
-		const size_t datasize = OUTPUT_SIZE * 3 * sizeof(float);
+		const size_t numelem  = OUTPUT_SIZE * 3;
+		const size_t datasize = numelem * sizeof(float);
 		std::vector<float> outdata;
-		outdata.resize(datasize);
+		outdata.resize(numelem);
 
 		K_CUDA_CHECK(cudaMemcpy(outdata.data(), buffer.data, datasize, cudaMemcpyDeviceToHost));
 		K_CUDA_CHECK(cudaDeviceSynchronize());
@@ -381,9 +369,9 @@ static void bmfr()
 		}
 	};
 
-    dim3 k_workset_grid_size((IMAGE_WIDTH + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH, (IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH);
-	dim3 k_workset_with_margin_grid_size(k_workset_grid_size.x + 1, k_workset_grid_size.y + 1);
     dim3 k_block_size(LOCAL_WIDTH, LOCAL_HEIGHT);
+    dim3 k_workset_grid_size((IMAGE_WIDTH + k_block_size.x - 1) / k_block_size.x, (IMAGE_HEIGHT + k_block_size.y - 1) / k_block_size.y);
+	dim3 k_workset_with_margin_grid_size(((IMAGE_WIDTH + BLOCK_EDGE_LENGTH) + k_block_size.x - 1) / k_block_size.x, ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH) + k_block_size.y - 1) / k_block_size.y);
     dim3 k_fitter_grid_size(WORKSET_WITH_MARGIN_BLOCK_COUNT);
     dim3 k_fitter_block_size(LOCAL_SIZE);
 
@@ -391,11 +379,14 @@ static void bmfr()
     {
 		printf("Frame %d\n", frame);
 
+		printf("  Load frame input data from disk\n");
+		LoadFrameInputData(frameInput, frame);
+
 		printf("  Transfert data from host to device\n");
-		K_CUDA_CHECK(cudaMemcpy(albedo_buffer.data, albedos[frame].data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
-        K_CUDA_CHECK(cudaMemcpy(normals_buffer.current()->data, normals[frame].data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
-        K_CUDA_CHECK(cudaMemcpy(positions_buffer.current()->data, positions[frame].data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
-        K_CUDA_CHECK(cudaMemcpy(noisy_1spp_color_buffer.current()->data, noisy_input[frame].data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
+		K_CUDA_CHECK(cudaMemcpy(albedo_buffer.data, frameInput.albedos.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(normals_buffer.current()->data, frameInput.normals.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(positions_buffer.current()->data, frameInput.positions.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(noisy_1spp_color_buffer.current()->data, frameInput.noisy1spps.data(), IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
 		printf("  Run accumulate_noisy_data kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_with_margin_grid_size.x,
@@ -405,6 +396,8 @@ static void bmfr()
 		);
 
         const int matrix_index = frame == 0 ? 0 : frame - 1;
+		const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
+		const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
 		run_accumulate_noisy_data(
 			k_workset_with_margin_grid_size,
 			k_block_size,
@@ -419,17 +412,25 @@ static void bmfr()
 			spp_buffer.current()->getTypedData<unsigned char>(),
 			spp_buffer.previous()->getTypedData<unsigned char>(),
 			features_buffer.getTypedData<float>(),
-			*reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]),
-			*reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]),
+			cam_mat,
+			pix_off,
 			frame
 		);
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
+		//run_test(k_workset_grid_size, k_block_size, noisy_1spp_color_buffer.current()->getTypedData<float>());
+		//K_CUDA_CHECK(cudaDeviceSynchronize());
+
+		std::vector<float> debug;
+		debug.resize(noisy_1spp_color_buffer.current()->size / sizeof(float));
+		K_CUDA_CHECK(cudaMemcpy(debug.data(), noisy_1spp_color_buffer.current()->data, noisy_1spp_color_buffer.current()->size, cudaMemcpyDeviceToHost));
+
 		//SaveDevice3Float32ImageToDisk(*normals_buffer.current(),	TO_OUTPUTS_FOLDER("normals_buffer_") + std::to_string(frame) + ".png");
 		//SaveDevice3Float32ImageToDisk(*positions_buffer.previous(), TO_OUTPUTS_FOLDER("positions_buffer_") + std::to_string(frame) + ".png");
-		//SaveDevice3Float32ImageToDisk(*noisy_1spp_color_buffer.current(),  TO_OUTPUTS_FOLDER("noisy_1spp_color_buffer_") + std::to_string(frame) + ".png");
+		SaveDevice3Float32ImageToDisk(*noisy_1spp_color_buffer.current(),  TO_OUTPUTS_FOLDER("noisy_1spp_color_buffer_") + std::to_string(frame) + ".png");
 
+#if 0
 		printf("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_fitter_grid_size.x,
 			k_fitter_grid_size.y,
@@ -447,6 +448,7 @@ static void bmfr()
 		);
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
+#endif
 
 		printf("  Run weighted_sum kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_grid_size.x,
@@ -470,7 +472,7 @@ static void bmfr()
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		//SaveDevice3Float32ImageToDisk(features_min_max_buffer, TO_OUTPUTS_FOLDER("features_min_max_buffer_") + std::to_string(frame) + ".png");
-		SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
+		//SaveDevice3Float32ImageToDisk(noisefree_color_estimate, TO_OUTPUTS_FOLDER("noisefree_color_estimate_") + std::to_string(frame) + ".png");
 
 		// This is not timed because in real use case the result is stored to frame buffer
         //K_CUDA_CHECK(cudaMemcpy(out_data[frame].data(), result_buffer.current()->data, OUTPUT_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost));
@@ -479,48 +481,10 @@ static void bmfr()
 		// Swap all double buffers
         std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<DeviceBuffer>::swap, std::placeholders::_1));
 	}
-
-	return;
-
-	// Store results
-    error = false;
-	#pragma omp parallel for
-    for(int frame = 0; frame < FRAME_COUNT; ++frame)
-    {
-        if(error)
-            continue;
-
-        // Output image
-        std::string output_file_name = OUTPUT_FILE_NAME + std::to_string(frame) + "_cuda.png";
-
-		printf("Save image %s\n", output_file_name.c_str());
-
-        // Crops back from WORKSET_SIZE to IMAGE_SIZE
-        OpenImageIO::ImageSpec spec(IMAGE_WIDTH, IMAGE_HEIGHT, 3, OpenImageIO::TypeDesc::FLOAT);
-        std::unique_ptr<OpenImageIO::ImageOutput> out(OpenImageIO::ImageOutput::create(output_file_name));
-        if(out && out->open(output_file_name, spec))
-        {
-            out->write_image(OpenImageIO::TypeDesc::FLOAT, out_data[frame].data(), 3 * sizeof(float), WORKSET_WIDTH * 3 * sizeof(float), 0);
-            out->close();
-        }
-        else
-        {
-            printf("Can't create image file on disk to location %s\n", output_file_name.c_str());
-            error = true;
-            continue;
-        }
-    }
-
-    if(error)
-    {
-        printf("One or more errors occurred during image saving\n");
-        return;
-    }
 }
 
 int bmfr_cuda()
 {
 	bmfr();
-	//run_cuda_hello();
 	return 0;
 }

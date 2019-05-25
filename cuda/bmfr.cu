@@ -303,6 +303,7 @@ inline __device__ ivec2 mirror2(ivec2 index, ivec2 size)
 
 // Conversion functions ////////////////////////////////////////////////////////
 
+#if USE_HALF_PRECISION_IN_FEATURES_DATA
 inline __device__ half FloatToHalf(float x)
 {
 	return __float2half(x);
@@ -312,6 +313,7 @@ inline __device__ half2 FloatToHalf(vec2 v)
 {
 	return half2(__float2half(v.x), __float2half(v.y));
 }
+#endif
 
 inline __device__ int FloatToIntRn(float x)
 {
@@ -335,7 +337,7 @@ inline __device__ ivec4 FloatToIntRn(vec4 v)
 
 // Load/store vec3 functions /////////////////////////////////////////////////
 
-inline __device__ void store_float3(volatile float * __restrict__ buffer, const int index, const vec3 value)
+inline __device__ void store_float3(volatile float * K_RESTRICT buffer, const int index, const vec3 value)
 {
 	buffer[index * 3 + 0] = value.x;
 	buffer[index * 3 + 1] = value.y;
@@ -350,7 +352,7 @@ inline __device__ void store_float3(volatile float * __restrict__ buffer, const 
 
 #define load_float3(buffer, index) vec3(buffer[(index) * 3], buffer[(index) * 3 + 1], buffer[(index) * 3 + 2])
 
-// inline __device__ vec3 load_float3(volatile float * __restrict__ buffer, const int index)
+// inline __device__ vec3 load_float3(volatile float * K_RESTRICT buffer, const int index)
 // {
 //   return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
 // }
@@ -367,24 +369,24 @@ inline __device__ void store_float3(volatile float * __restrict__ buffer, const 
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
 
 __global__ void accumulate_noisy_data(
-	vec2 * __restrict__ out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
-	unsigned char* __restrict__ accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * __restrict__ current_normals,			// [in]  Current  (world) normals
-	const float * __restrict__ previous_normals,		// [in]  Previous (world) normals
-	const float * __restrict__ current_positions,		// [in]  Current  world positions
-	const float * __restrict__ previous_positions,		// [in]  Previous world positions
-		  float * __restrict__ current_noisy,			// [out] Current  noisy 1spp color
-	const float * __restrict__ previous_noisy,			// [in]  Previous noisy 1spp color
-	const unsigned char * __restrict__ previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
-		  unsigned char * __restrict__ current_spp,		// [out] Current  number of samples accumulated (for CMA)
+	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
+	unsigned char* K_RESTRICT accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT current_normals,		// [in]  Current  (world) normals
+	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
+	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
+	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
+		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
+	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
+	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
+		  unsigned char * K_RESTRICT current_spp,	// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * __restrict__ features_data,					// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_data,				// [out] Features buffer (half-precision)
 	#else
-	float * __restrict__ features_data,					// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_data,				// [out] Features buffer (single-precision)
 	#endif
-      const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
-      const vec2 pixel_offset,
-      const int frame_number							// [in]  Current frame number
+	const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
+	const vec2 pixel_offset,
+	const int frame_number							// [in]  Current frame number
 )
 {
 	const ivec2 gid = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
@@ -436,9 +438,11 @@ __global__ void accumulate_noisy_data(
 	{
 		// Project current world position into previous frame with the previous ViewProj matrix
 
-		// TODO: check if the computation is correct + transpose on CPU to avoid contructing a vec4 for each row
 		// Matrix multiplication and normalization to 0..1
 		vec2 prev_frame_uv;
+
+		// TODO: send matrix transposed
+		#if 1
 		prev_frame_uv.x = Dot(prev_frame_camera_matrix.row(0), world_position); // Transform x
 		prev_frame_uv.y = Dot(prev_frame_camera_matrix.row(1), world_position); // Transform y
 		// No need for z-buffer in accumulation of the noisy data
@@ -446,7 +450,17 @@ __global__ void accumulate_noisy_data(
 		// --> compare previous z (store previous frame Z-buffer) with prev_frame_pixel_uv.z
 		//prev_frame_uv.z = Dot(prev_frame_camera_matrix.row(2), world_position); // Transform z
 		prev_frame_uv /= Dot(prev_frame_camera_matrix.row(3), world_position);
-		prev_frame_uv += 1.f; prev_frame_uv /= 2.f; // prev_frame_uv = prev_frame_uv * 0.5f + 0.5f;
+		#else
+		prev_frame_uv.x = Dot(prev_frame_camera_matrix[0], world_position); // Transform x
+		prev_frame_uv.y = Dot(prev_frame_camera_matrix[1], world_position); // Transform y
+		// No need for z-buffer in accumulation of the noisy data
+		// -> might be useful if we use it to detect disocclusion
+		// --> compare previous z (store previous frame Z-buffer) with prev_frame_pixel_uv.z
+		//prev_frame_uv.z = Dot(prev_frame_camera_matrix[2], world_position); // Transform z
+		prev_frame_uv /= Dot(prev_frame_camera_matrix[3], world_position);
+		#endif
+
+		prev_frame_uv = prev_frame_uv * vec2(0.5f) + vec2(0.5f);
 
 		// Compute the pixel coordinates in the previous frame (in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1])
 		prev_frame_pixel_f = prev_frame_uv * vec2(IMAGE_WIDTH, IMAGE_HEIGHT);
@@ -463,7 +477,15 @@ __global__ void accumulate_noisy_data(
 		const ivec2 offsets[4] = { ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1) };
 
 		vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+
+		// /!\ We need to saturate here because otherwise the sum of the weights isn't equal to 1
+		// TODO: try to use Fract
+		prev_pixel_fract.x = Clamp(prev_pixel_fract.x, 0.f, 1.f); // Saturate
+		prev_pixel_fract.y = Clamp(prev_pixel_fract.y, 0.f, 1.f); // Saturate
 		vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+		//one_minus_prev_pixel_fract.x = Clamp(one_minus_prev_pixel_fract.x, 0.f, 1.f); // Saturate
+		//one_minus_prev_pixel_fract.y = Clamp(one_minus_prev_pixel_fract.y, 0.f, 1.f); // Saturate
+
 		float weights[4];
 		weights[0] = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
 		weights[1] = prev_pixel_fract.x           * one_minus_prev_pixel_fract.y;
@@ -490,19 +512,19 @@ __global__ void accumulate_noisy_data(
 				float position_distance_squared = Dot(position_difference, position_difference);
 
 				// World position distance discard
-				if(position_distance_squared < float(POSITION_LIMIT_SQUARED)){
-
+				if(position_distance_squared < float(POSITION_LIMIT_SQUARED))
+				{
 					// Fetch previous frame normal
 					vec3 prev_normal = load_float3(previous_normals, linear_sample_location);
 
 					// Distance of the normals
-					// NOTE: could use some other distance metric (e.g. angle), but we use hard
+					// TODO: could use some other distance metric (e.g. angle), but we use hard
 					// experimentally found threshold -> means that the metric doesn't matter.
 					vec3 normal_difference = prev_normal - normal;
 					float normal_distance_squared = Dot(normal_difference, normal_difference);
 
-					if(normal_distance_squared < float(NORMAL_LIMIT_SQUARED)){
-
+					if(normal_distance_squared < float(NORMAL_LIMIT_SQUARED))
+					{
 						// Pixel passes all tests so store it to "validity bitmask"
 						store_accept |= 1 << i;
 
@@ -624,30 +646,41 @@ __global__ void accumulate_noisy_data(
 		store_float3(current_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
 		out_prev_frame_pixel[linear_pixel] = prev_frame_pixel_f; // Previous frame pixel coordinates (to sample history)
 		accept_bools[linear_pixel] = store_accept; // "Previous frame bilinear samples validity" bitmask
+
+		// Kernel debug: stored in current_noisy buffer
+		#if 0
+		vec3 debug = vec3(0.0f);
+		//debug = vec3(prev_frame_uv.x, prev_frame_uv.y, 0);
+		//debug = vec3(blend_alpha);
+		debug = HeatMap(Saturate(float(new_spp) / 255.f));
+		//debug = vec3(float(store_accept > 0));
+		//debug = vec3(float(store_accept == ((1 << 4) - 1)));
+		store_float3(current_noisy, linear_pixel, debug);
+		#endif
 	}
 }
 
 extern "C" void run_accumulate_noisy_data(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	vec2 * __restrict__ out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
-	unsigned char* __restrict__ accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * __restrict__ current_normals,			// [in]  Current  (world) normals
-	const float * __restrict__ previous_normals,		// [in]  Previous (world) normals
-	const float * __restrict__ current_positions,		// [in]  Current  world positions
-	const float * __restrict__ previous_positions,		// [in]  Previous world positions
-		  float * __restrict__ current_noisy,			// [out] Current  noisy 1spp color
-	const float * __restrict__ previous_noisy,			// [in]  Previous noisy 1spp color
-	const unsigned char * __restrict__ previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
-		  unsigned char * __restrict__ current_spp,		// [out] Current  number of samples accumulated (for CMA)
+	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
+	unsigned char* K_RESTRICT accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT current_normals,		// [in]  Current  (world) normals
+	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
+	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
+	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
+		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
+	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
+	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
+		  unsigned char * K_RESTRICT current_spp,	// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * __restrict__ features_data,					// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_data,				// [out] Features buffer (half-precision)
 	#else
-	float * __restrict__ features_data,					// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_data,				// [out] Features buffer (single-precision)
 	#endif
-      const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
-      const vec2 pixel_offset,
-      const int frame_number							// [in]  Current frame number
+	const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
+	const vec2 pixel_offset,
+	const int frame_number							// [in]  Current frame number
 )
 {
 	accumulate_noisy_data<<<grid_size, block_size>>>(
@@ -683,12 +716,12 @@ extern "C" void run_accumulate_noisy_data(
 
 // Block size: (256, 1, 1)
 __global__ void fitter(
-	float * __restrict__ weights,					// [out] Features weights
-	float * __restrict__ mins_maxs,					// [out] Min and max of features values per block (world_positions)
+	float * K_RESTRICT weights,					// [out] Features weights
+	float * K_RESTRICT mins_maxs,					// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * __restrict__ features_buffer,			// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
 	#else
-	float * __restrict__ features_buffer,			// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
 	#endif
 	const int frame_number							// [in]  Current frame number
 )
@@ -1020,12 +1053,12 @@ __global__ void fitter(
 extern "C" void run_fitter(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	float * __restrict__ weights,					// [out] Features weights
-	float * __restrict__ mins_maxs,					// [out] Min and max of features values per block (world_positions)
+	float * K_RESTRICT weights,					// [out] Features weights
+	float * K_RESTRICT mins_maxs,					// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * __restrict__ features_buffer,			// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
 	#else
-	float * __restrict__ features_buffer,			// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
 	#endif
 	const int frame_number							// [in]  Current frame number
 )
@@ -1042,12 +1075,12 @@ extern "C" void run_fitter(
 // -> outputs the noise-free 1spp color estimate
 
 __global__ void weighted_sum(
-	const float * __restrict__ weights,				// [in]	 Features weights computed by the fitter kernel
-	const float * __restrict__ mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  float * __restrict__ output,				// [out] Noise-free color estimate
-	const float * __restrict__ current_normals,		// [in]  Current (world) normals
-	const float * __restrict__ current_positions,	// [in]  Current world positions
-	const float * __restrict__ current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
+	const float * K_RESTRICT weights,				// [in]	 Features weights computed by the fitter kernel
+	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
+		  float * K_RESTRICT output,				// [out] Noise-free color estimate
+	const float * K_RESTRICT current_normals,		// [in]  Current (world) normals
+	const float * K_RESTRICT current_positions,	// [in]  Current world positions
+	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
 	const int frame_number							// [in]  Current frame number
 )
 {
@@ -1059,6 +1092,9 @@ __global__ void weighted_sum(
 
 	// Linear pixel index
 	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
+
+	store_float3(output, linear_pixel, vec3(0.f, 1.f, 0.f));
+	return;
 
 	// Load weights and min_max which this pixel should use.
 	const ivec2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly 'frame_number%BLOCK_OFFSETS_COUNT'
@@ -1094,7 +1130,7 @@ __global__ void weighted_sum(
 
 		// Load weight and sum
 		vec3 weight = load_float3(weights, group_index * (BUFFER_COUNT - 3) + feature_buffer);
-		color += 1 * feature;
+		color += weight * feature;
 	}
 
 	// Remove negative values from every component of the fitting results
@@ -1112,12 +1148,12 @@ __global__ void weighted_sum(
 extern "C" void run_weighted_sum(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	const float * __restrict__ weights,				// [in]	 Features weights computed by the fitter kernel
-	const float * __restrict__ mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  float * __restrict__ output,				// [out] Noise-free color estimate
-	const float * __restrict__ current_normals,		// [in]  Current (world) normals
-	const float * __restrict__ current_positions,	// [in]  Current world positions
-	const float * __restrict__ current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
+	const float * K_RESTRICT weights,				// [in]	 Features weights computed by the fitter kernel
+	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
+		  float * K_RESTRICT output,				// [out] Noise-free color estimate
+	const float * K_RESTRICT current_normals,		// [in]  Current (world) normals
+	const float * K_RESTRICT current_positions,	// [in]  Current world positions
+	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
 	const int frame_number							// [in]  Current frame number
 )
 {
@@ -1138,14 +1174,14 @@ extern "C" void run_weighted_sum(
 // TODO: make 2 versions: one for frame 0 and one for the rest (avoid a branch)
 
 __global__ void accumulate_filtered_data(
-	const float * __restrict__ filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
-	const vec2 * __restrict__ in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
-	const unsigned char * __restrict__ accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * __restrict__ albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
-		  float * __restrict__ tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
-	const unsigned char* __restrict__ current_spp,		// [in]	 Current number of samples accumulated (for CMA)
-	const float * __restrict__ accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * __restrict__ accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
+	const unsigned char * K_RESTRICT accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  float * K_RESTRICT accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
 	const int frame_number								// [in]  Current frame number
 )
 {
@@ -1255,14 +1291,14 @@ __global__ void accumulate_filtered_data(
 extern "C" void run_accumulate_filtered_data(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	const float * __restrict__ filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
-	const vec2 * __restrict__ in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
-	const unsigned char * __restrict__ accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * __restrict__ albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
-		  float * __restrict__ tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
-	const unsigned char* __restrict__ current_spp,		// [in]	 Current number of samples accumulated (for CMA)
-	const float * __restrict__ accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * __restrict__ accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
+	const unsigned char * K_RESTRICT accept_bools,	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,			// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,		// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  float * K_RESTRICT accumulated_frame,		// [out] Current frame noise-free accumulated color estimate
 	const int frame_number								// [in]  Current frame number
 )
 {
@@ -1285,10 +1321,10 @@ extern "C" void run_accumulate_filtered_data(
 // - make two versions of the kernel: one for the frame 0 and one for the rest
 // - optimize with local/shared memory
 __global__ void taa(
-	const vec2 * __restrict__ in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
-	const float * __restrict__ new_frame,			// [in]	 Current frame color buffer
-		  float * __restrict__ result_frame,		// [out] Antialiased frame color buffer
-	const float * __restrict__ prev_frame,			// [in]  Previous frame color buffer
+	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * K_RESTRICT new_frame,			// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,		// [out] Antialiased frame color buffer
+	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
 	const int frame_number							// [in]  Current frame number
 )
 {
@@ -1410,10 +1446,10 @@ __global__ void taa(
 extern "C" void run_taa(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	const vec2 * __restrict__ in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
-	const float * __restrict__ new_frame,			// [in]	 Current frame color buffer
-		  float * __restrict__ result_frame,		// [out] Antialiased frame color buffer
-	const float * __restrict__ prev_frame,			// [in]  Previous frame color buffer
+	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * K_RESTRICT new_frame,			// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,		// [out] Antialiased frame color buffer
+	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
 	const int frame_number							// [in]  Current frame number
 )
 {
