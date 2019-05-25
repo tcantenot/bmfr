@@ -277,7 +277,10 @@ int bmfr_cuda(TmpData & tmpData)
 	cudaBufferTotalSize += features_min_max_buffer.size;
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-    Double_buffer<DeviceBuffer> spp_buffer(IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(char));
+	//TODO: - why spp has OUTPUT_SIZE as size and not IMAGE_WIDTH x IMAGE_HEIGHT?
+	//		- why write to spp buffer is not inside the last if (several threads might write to the same index (linear_pixel))?
+	const size_t spp_buffer_size = OUTPUT_SIZE * sizeof(char);
+    Double_buffer<DeviceBuffer> spp_buffer(spp_buffer_size);
 	cudaBufferTotalSize += 2 * spp_buffer.current()->size;
 
 	std::vector<Double_buffer<DeviceBuffer> *> all_double_buffers =
@@ -391,8 +394,9 @@ int bmfr_cuda(TmpData & tmpData)
 			positions_buffer.previous()->getTypedData<float>(),
 			noisy_1spp_color_buffer.current()->getTypedData<float>(),
 			noisy_1spp_color_buffer.previous()->getTypedData<float>(),
-			spp_buffer.current()->getTypedData<unsigned char>(),
+			// TODO: invert the order of the spp buffers
 			spp_buffer.previous()->getTypedData<unsigned char>(),
+			spp_buffer.current()->getTypedData<unsigned char>(),
 			features_buffer.getTypedData<float>(),
 			cam_mat,
 			pix_off,
@@ -435,9 +439,9 @@ int bmfr_cuda(TmpData & tmpData)
 			tmpData.positions.resize(positions_size / sizeof(float));
 			K_CUDA_CHECK(cudaMemcpy(tmpData.positions.data(), positions_buffer.current()->data, positions_size, cudaMemcpyDeviceToHost));
 
-			//size_t noisy1spp_size = noisy_1spp_color_buffer.current()->size;
-			//tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
-			//K_CUDA_CHECK(cudaMemcpy(tmpData.noisy_1spp.data(), noisy_1spp_color_buffer.current()->data, noisy1spp_size, cudaMemcpyDeviceToHost));
+			size_t noisy1spp_size = noisy_1spp_color_buffer.current()->size;
+			tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.noisy_1spp.data(), noisy_1spp_color_buffer.current()->data, noisy1spp_size, cudaMemcpyDeviceToHost));
 
 			size_t features_buffer_size = features_buffer.size;
 			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));

@@ -407,7 +407,7 @@ int bmfr_opencl()
     cl::Buffer features_min_max_buffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2));
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(cl_char));
+    Double_buffer<cl::Buffer> spp_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE  * sizeof(cl_char));
 
 	std::vector<Double_buffer<cl::Buffer> *> all_double_buffers =
 	{
@@ -1044,7 +1044,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-	Double_buffer<cl_mem> spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_char));
+	const size_t spp_buffer_size = OUTPUT_SIZE * sizeof(cl_char);
+	Double_buffer<cl_mem> spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, spp_buffer_size);
 
 	std::vector<Double_buffer<cl_mem> *> all_double_buffers =
 	{
@@ -1206,24 +1207,23 @@ int bmfr_c_opencl(TmpData & tmpData)
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
 		{
-			size_t normals_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
+			size_t normals_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
 			tmpData.normals.resize(normals_size / sizeof(float));
 			ret = clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_size, tmpData.normals.data(), 0, NULL, NULL);
 
-			size_t positions_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
+			size_t positions_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
 			tmpData.positions.resize(positions_size / sizeof(float));
 			ret = clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_size, tmpData.positions.data(), 0, NULL, NULL);
 
-			//size_t noisy1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float);
-			//tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
-			//ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_color_buffer.current(), false, 0, noisy1spp_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
-			//assert(ret == CL_SUCCESS);
+			size_t noisy1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
+			tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_color_buffer.current(), false, 0, noisy1spp_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
 
 			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
 			ret = clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer.data(), 0, NULL, NULL);
 			assert(ret == CL_SUCCESS);
 
-			size_t spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT  * sizeof(cl_char);
 			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
 			ret = clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL);
 

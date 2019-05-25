@@ -15,7 +15,7 @@ int main()
     //bmfr_opencl();
 	bmfr_c_opencl(opencl_tmp_data);
 	
-#if 0
+#if 1
 	assert(cuda_tmp_data.normals.size() == opencl_tmp_data.normals.size());
 	for(int i = 0; i < cuda_tmp_data.normals.size(); ++i)
 	{
@@ -35,7 +35,7 @@ int main()
 	}
 #endif
 
-#if 0
+#if 1
 	assert(cuda_tmp_data.noisy_1spp.size() == opencl_tmp_data.noisy_1spp.size());
 	for(int i = 0; i < cuda_tmp_data.noisy_1spp.size(); ++i)
 	{
@@ -49,6 +49,7 @@ int main()
 	assert(cuda_tmp_data.features_buffer.size() == opencl_tmp_data.features_buffer.size());
 	for(int i = 0; i < cuda_tmp_data.features_buffer.size(); ++i)
 	{
+		// TODO: try to find out why delta has to be that big (1e-2f)
 		if(fabs(cuda_tmp_data.features_buffer[i] - opencl_tmp_data.features_buffer[i]) > 1e-2f)
 		{
 			printf("features_buffer[%d]: %f != %f\n", i, cuda_tmp_data.features_buffer[i], opencl_tmp_data.features_buffer[i]);
@@ -67,7 +68,7 @@ int main()
 	assert(cuda_tmp_data.features_weights_buffer.size() == opencl_tmp_data.features_weights_buffer.size());
 	for(int i = 0; i < cuda_tmp_data.features_weights_buffer.size(); ++i)
 	{
-		if(cuda_tmp_data.features_weights_buffer[i] != opencl_tmp_data.features_weights_buffer[i])
+		if(fabs(cuda_tmp_data.features_weights_buffer[i] - opencl_tmp_data.features_weights_buffer[i]) > 1e-4f)
 		{
 			printf("features_weights_buffer[%d]: %f != %f\n", i, cuda_tmp_data.features_weights_buffer[i], opencl_tmp_data.features_weights_buffer[i]);
 		}
@@ -76,7 +77,7 @@ int main()
 	assert(cuda_tmp_data.features_min_max_buffer.size() == opencl_tmp_data.features_min_max_buffer.size());
 	for(int i = 0; i < cuda_tmp_data.features_min_max_buffer.size(); ++i)
 	{
-		if(cuda_tmp_data.features_min_max_buffer[i] != opencl_tmp_data.features_min_max_buffer[i])
+		if(fabs(cuda_tmp_data.features_min_max_buffer[i] - opencl_tmp_data.features_min_max_buffer[i]) > 1e-5f)
 		{
 			printf("features_min_max_buffer[%d]: %f != %f\n", i, cuda_tmp_data.features_min_max_buffer[i], opencl_tmp_data.features_min_max_buffer[i]);
 		}
