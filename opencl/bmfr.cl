@@ -22,7 +22,6 @@
  *  THE SOFTWARE.
  */
 
-#define static
 
 inline void SyncThreads()
 {
@@ -158,16 +157,35 @@ static inline void store_r_mat_channel(__local float3* r_mat, const int x, const
 }
 
 // Random generator from here http://asgerhoedt.dk/?p=323
-static inline float random(unsigned int a)
+inline unsigned int thrust_hash(unsigned int seed)
 {
-	a = (a+0x7ed55d16) + (a<<12);
-	a = (a^0xc761c23c) ^ (a>>19);
-	a = (a+0x165667b1) + (a<<5);
-	a = (a+0xd3a2646c) ^ (a<<9);
-	a = (a+0xfd7046c5) + (a<<3);
-	a = (a^0xb55a4f09) ^ (a>>16);
+	seed = (seed+0x7ed55d16) + (seed<<12);
+	seed = (seed^0xc761c23c) ^ (seed>>19);
+	seed = (seed+0x165667b1) + (seed<<5);
+	seed = (seed+0xd3a2646c) ^ (seed<<9);
+	seed = (seed+0xfd7046c5) + (seed<<3);
+	seed = (seed^0xb55a4f09) ^ (seed>>16);
+	return seed;
+}
 
-	return convert_float(a) / convert_float(UINT_MAX);
+inline float thrust_rand01(unsigned int seed)
+{
+	return convert_float(thrust_hash(seed)) / convert_float(UINT_MAX);
+}
+
+inline unsigned int wang_hash(unsigned int seed)
+{
+    seed = (seed ^ 61) ^ (seed >> 16);
+    seed *= 9;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2d;
+    seed = seed ^ (seed >> 15);
+    return seed;
+}
+
+inline float wang_rand01(unsigned int seed)
+{
+	return convert_float(wang_hash(seed)) / convert_float(UINT_MAX);
 }
 
 static inline float add_random(
@@ -178,9 +196,11 @@ static inline float add_random(
 	const int frame_number
 )
 {
-	float seed = id + sub_vector * LOCAL_SIZE + feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
+	const int seed = id + sub_vector * LOCAL_SIZE + feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
 				 frame_number * BUFFER_COUNT * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH;
-	float noise01 = random(seed);
+	
+	float noise01 = thrust_rand01(seed);
+	//float noise01 = wang_rand01(seed);
 	float signedZeroMeanNoise = 2.f * noise01 - 1.f;
 	return value + NOISE_AMOUNT * signedZeroMeanNoise;
 }

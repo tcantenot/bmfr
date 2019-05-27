@@ -63,7 +63,7 @@
 
 // ### Edit these defines if you want to experiment different parameters ###
 // The amount of noise added to feature buffers to cancel sigularities
-#define NOISE_AMOUNT 1e-2
+#define NOISE_AMOUNT 1e-2f
 
 // The amount of new frame used in accumulated frame (1.f would mean no accumulation).
 #define BLEND_ALPHA 0.2f
@@ -76,16 +76,22 @@
 "1.f,"\
 "normal.x,"\
 "normal.y,"\
-"normal.z,"\
+"normal.z"
+
+#define USE_SCALED_FEATURES 1
+
+#if USE_SCALED_FEATURES
 // The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
 #define SCALED_FEATURE_BUFFERS \
-"world_position.x,"\
+",world_position.x,"\
 "world_position.y,"\
 "world_position.z,"\
 "world_position.x*world_position.x,"\
 "world_position.y*world_position.y,"\
 "world_position.z*world_position.z"
-
+#else
+#define SCALED_FEATURE_BUFFERS ""
+#endif
 
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated
@@ -234,9 +240,14 @@ int bmfr_opencl()
 
     std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
     std::string features_scaled(SCALED_FEATURE_BUFFERS);
-    const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
     // + 1 because last one does not have ',' after it.
-    const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
+#if USE_SCALED_FEATURES
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',');
+#else
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = 0;
+#endif
     // + 3 stands for three noisy spp color channels.
     const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
@@ -804,9 +815,14 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
 	std::string features_scaled(SCALED_FEATURE_BUFFERS);
-	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
 	// + 1 because last one does not have ',' after it.
-	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
+#if USE_SCALED_FEATURES
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',');
+#else
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = 0;
+#endif
 	// + 3 stands for three noisy spp color channels.
 	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
@@ -1193,6 +1209,25 @@ int bmfr_c_opencl(TmpData & tmpData)
 		assert(ret == CL_SUCCESS);
 		ret = clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
+
+		if(0)
+		{
+			std::vector<float> debugData;
+			debugData.resize(features_buffer_size / sizeof(float));
+
+			for(auto i = 0; i < debugData.size(); ++i)
+			{
+				debugData[i] = 0.42f;
+			}
+
+			ret = clEnqueueWriteBuffer(command_queue, features_buffer, blocking_write, 0, features_buffer_size, debugData.data(), 0, nullptr, nullptr);
+			assert(ret == CL_SUCCESS);
+
+			ret = clFlush(command_queue);
+			assert(ret == CL_SUCCESS);
+			ret = clFinish(command_queue);
+			assert(ret == CL_SUCCESS);
+		}
  
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weightss

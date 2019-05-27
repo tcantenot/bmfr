@@ -210,16 +210,35 @@ inline __device__ void store_r_mat_channel(/*volatile*/ cvec3 * r_mat, const int
 // R matrix indexing and operations ////////////////////////////////////////////
 
 // Random generator from here http://asgerhoedt.dk/?p=323
-inline __device__ float random(unsigned int a)
+inline __device__ unsigned int thrust_hash(unsigned int seed)
 {
-	a = (a+0x7ed55d16) + (a<<12);
-	a = (a^0xc761c23c) ^ (a>>19);
-	a = (a+0x165667b1) + (a<<5);
-	a = (a+0xd3a2646c) ^ (a<<9);
-	a = (a+0xfd7046c5) + (a<<3);
-	a = (a^0xb55a4f09) ^ (a>>16);
+	seed = (seed+0x7ed55d16) + (seed<<12);
+	seed = (seed^0xc761c23c) ^ (seed>>19);
+	seed = (seed+0x165667b1) + (seed<<5);
+	seed = (seed+0xd3a2646c) ^ (seed<<9);
+	seed = (seed+0xfd7046c5) + (seed<<3);
+	seed = (seed^0xb55a4f09) ^ (seed>>16);
+	return seed;
+}
 
-	return float(a) / float(UINT_MAX);
+inline __device__ float thrust_rand01(unsigned int seed)
+{
+	return float(thrust_hash(seed)) / float(UINT_MAX);
+}
+
+inline __device__ unsigned int wang_hash(unsigned int seed)
+{
+    seed = (seed ^ 61) ^ (seed >> 16);
+    seed *= 9;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2d;
+    seed = seed ^ (seed >> 15);
+    return seed;
+}
+
+inline __device__ float wang_rand01(unsigned int seed)
+{
+	return float(wang_hash(seed)) / float(UINT_MAX);
 }
 
 inline __device__ float add_random(
@@ -230,9 +249,11 @@ inline __device__ float add_random(
 	const int frame_number
 )
 {
-	float seed = id + sub_vector * LOCAL_SIZE + feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
+	const int seed = id + sub_vector * LOCAL_SIZE + feature_buffer * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH +
 				 frame_number * BUFFER_COUNT * BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH;
-	float noise01 = random(seed);
+
+	float noise01 = thrust_rand01(seed);
+	//float noise01 = wang_rand01(seed);
 	float signedZeroMeanNoise = 2.f * noise01 - 1.f;
 	return value + NOISE_AMOUNT * signedZeroMeanNoise;
 }
@@ -876,6 +897,9 @@ __global__ void fitter(
 			vec_length = Sqrt(vec_length + u_vec[col_limited] * u_vec[col_limited]);
 			u_vec[col_limited] -= vec_length;
 			u_length_squared += u_vec[col_limited] * u_vec[col_limited];
+
+			// TODO: store 1.0f/u_length_squared to avoid multiplies divisions later
+
 			// (u_length_squared is now updated length squared)
 			r_value = vec_length;
 		}

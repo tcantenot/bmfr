@@ -410,6 +410,20 @@ int bmfr_cuda(TmpData & tmpData)
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weights
 
+		if(0)
+		{
+			size_t features_buffer_size = features_buffer.size;
+			std::vector<float> debugData;
+			debugData.resize(features_buffer_size / sizeof(float));
+
+			for(auto i = 0; i < debugData.size(); ++i)
+			{
+				debugData[i] = 0.42f;
+			}
+			K_CUDA_CHECK(cudaMemcpy(features_buffer.data, debugData.data(), features_buffer_size, cudaMemcpyHostToDevice));
+			K_CUDA_CHECK(cudaDeviceSynchronize());
+		}
+
 		printf("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_fitter_grid_size.x,
 			k_fitter_grid_size.y,

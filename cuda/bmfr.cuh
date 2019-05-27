@@ -184,7 +184,7 @@ inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
 
 // ### Edit these defines if you want to experiment different parameters ###
 // The amount of noise added to feature buffers to cancel sigularities
-#define NOISE_AMOUNT 1e-2
+#define NOISE_AMOUNT 1e-2f
 
 // The amount of new frame used in accumulated frame (1.f would mean no accumulation).
 #define BLEND_ALPHA 0.2f
