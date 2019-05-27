@@ -12,6 +12,11 @@ int main()
 {
 	TmpData cuda_tmp_data, opencl_tmp_data;
 	bmfr_cuda(cuda_tmp_data);
+
+#if !ENABLE_DEBUG_OUTPUT_TMP_DATA
+	return 0;
+#endif
+
     //bmfr_opencl();
 	bmfr_c_opencl(opencl_tmp_data);
 
@@ -74,9 +79,16 @@ int main()
 	CheckDiffFloat("normals", cuda_tmp_data.normals, opencl_tmp_data.normals);
 	CheckDiffFloat("positions", cuda_tmp_data.positions, opencl_tmp_data.positions);
 	CheckDiffFloat("noisy_1spp", cuda_tmp_data.noisy_1spp, opencl_tmp_data.noisy_1spp);
-	CheckDiffFloat("min_max", cuda_tmp_data.features_min_max_buffer, opencl_tmp_data.features_min_max_buffer);
-	CheckDiffFloat("features_buffer", cuda_tmp_data.features_buffer, opencl_tmp_data.features_buffer);
-	CheckDiffFloat("features_weights_buffer", cuda_tmp_data.features_weights_buffer, opencl_tmp_data.features_weights_buffer);
+	CheckDiffFloat("prev_frame_pixel_coords_buffer", cuda_tmp_data.prev_frame_pixel_coords_buffer, opencl_tmp_data.prev_frame_pixel_coords_buffer);
+	
+	assert(cuda_tmp_data.prev_frame_bilinear_samples_validity_mask.size() == opencl_tmp_data.prev_frame_bilinear_samples_validity_mask.size());
+	for(int i = 0; i < cuda_tmp_data.prev_frame_bilinear_samples_validity_mask.size(); ++i)
+	{
+		if(cuda_tmp_data.prev_frame_bilinear_samples_validity_mask[i] != opencl_tmp_data.prev_frame_bilinear_samples_validity_mask[i])
+		{
+			printf("prev_frame_bilinear_samples_validity_mask[%d]: %d != %d\n", i, (int)cuda_tmp_data.prev_frame_bilinear_samples_validity_mask[i], (int)opencl_tmp_data.prev_frame_bilinear_samples_validity_mask[i]);
+		}
+	}
 
 	assert(cuda_tmp_data.spp.size() == opencl_tmp_data.spp.size());
 	for(int i = 0; i < cuda_tmp_data.spp.size(); ++i)
@@ -87,5 +99,14 @@ int main()
 		}
 	}
 	
+	CheckDiffFloat("min_max", cuda_tmp_data.features_min_max_buffer, opencl_tmp_data.features_min_max_buffer);
+	CheckDiffFloat("features_buffer", cuda_tmp_data.features_buffer, opencl_tmp_data.features_buffer);
+	CheckDiffFloat("features_weights_buffer", cuda_tmp_data.features_weights_buffer, opencl_tmp_data.features_weights_buffer);
+
+	CheckDiffFloat("noisefree_1spp", cuda_tmp_data.noisefree_1spp, opencl_tmp_data.noisefree_1spp);
+	CheckDiffFloat("noisefree_1spp_accumulated", cuda_tmp_data.noisefree_1spp_accumulated, opencl_tmp_data.noisefree_1spp_accumulated);
+	CheckDiffFloat("noisefree_1spp_acc_tonemapped", cuda_tmp_data.noisefree_1spp_acc_tonemapped, opencl_tmp_data.noisefree_1spp_acc_tonemapped);
+	CheckDiffFloat("result", cuda_tmp_data.result, opencl_tmp_data.result);
+
 	return 0;
 }

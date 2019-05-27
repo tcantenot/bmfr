@@ -47,7 +47,7 @@
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 // TODO detect FRAME_COUNT from the input files
-#define FRAME_COUNT 1
+//#define FRAME_COUNT 1
 // Location where input frames and feature buffers are located
 #define INPUT_DATA_PATH ../data/classroom/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
@@ -375,7 +375,7 @@ int bmfr_opencl()
     Double_buffer<cl::Buffer> positions_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
     
 	// Noisy 1spp color buffer (3 * float32)
-	Double_buffer<cl::Buffer> noisy_1spp_color_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
+	Double_buffer<cl::Buffer> noisy_1spp_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
 
 	// Features buffer size
     const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
@@ -385,14 +385,14 @@ int bmfr_opencl()
     cl::Buffer features_buffer(context, CL_MEM_READ_WRITE, features_buffer_size, nullptr);
 
 	// Noise-free color estimate (3 * float32)
-    cl::Buffer noisefree_color_estimate(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+    cl::Buffer noisefree_1spp(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
 
 	// TODO: why does the size of this buffer is WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT and not WORKSET_WIDTH x WORKSET_HEIGHT?
 	// -> it seems we are not writing/reading in the part of the buffer that is outside of image (because of offsets)
 	// (see kernel 'accumulate_filtered_data' that is the only kernel using it)
-	// --> should have the same size as 'tone_mapped_buffer'
+	// --> should have the same size as 'noisefree_1spp_acc_tonemapped'
 	// Noise-free accumulated color estimate (3 * float32)
-    Double_buffer<cl::Buffer> noisefree_accumulated_color_estimate(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
+    Double_buffer<cl::Buffer> noisefree_1spp_accumulated(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
 
 	// Final antialiased color buffer (3 * float32)
     Double_buffer<cl::Buffer> result_buffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
@@ -407,7 +407,7 @@ int bmfr_opencl()
     cl::Buffer albedo_buffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
 
 	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
-    cl::Buffer tone_mapped_buffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
+    cl::Buffer noisefree_1spp_acc_tonemapped(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float));
 
 	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
     //cl::Buffer features_weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
@@ -424,8 +424,8 @@ int bmfr_opencl()
 	{
 		&normals_buffer,
 		&positions_buffer,
-		&noisy_1spp_color_buffer,
-		&noisefree_accumulated_color_estimate,
+		&noisy_1spp_buffer,
+		&noisefree_1spp_accumulated,
 		&result_buffer,
 		&spp_buffer
 	};
@@ -470,18 +470,18 @@ int bmfr_opencl()
     arg_index = 0;
     weighted_sum_kernel.setArg(arg_index++, features_weights_buffer);	// [in]	 Features weights computed by the fitter kernel
     weighted_sum_kernel.setArg(arg_index++, features_min_max_buffer);	// [in]  Min and max of features values per block (world_positions)
-    weighted_sum_kernel.setArg(arg_index++, noisefree_color_estimate);	// [out] Noise-free color estimate
+    weighted_sum_kernel.setArg(arg_index++, noisefree_1spp);	// [out] Noise-free color estimate
 
     arg_index = 0;
-    accum_filtered_kernel.setArg(arg_index++, noisefree_color_estimate);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
+    accum_filtered_kernel.setArg(arg_index++, noisefree_1spp);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
     accum_filtered_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);				// [in]  Previous frame pixel coordinates (after reprojection)
     accum_filtered_kernel.setArg(arg_index++, prev_frame_bilinear_samples_validity_mask);	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
     accum_filtered_kernel.setArg(arg_index++, albedo_buffer);								// [in]  Albedo buffer of the current frame (non-noisy)
-    accum_filtered_kernel.setArg(arg_index++, tone_mapped_buffer);							// [out] Accumulated and tonemapped noise-free color estimate
+    accum_filtered_kernel.setArg(arg_index++, noisefree_1spp_acc_tonemapped);							// [out] Accumulated and tonemapped noise-free color estimate
 
     arg_index = 0;
     taa_kernel.setArg(arg_index++, prev_frame_pixel_coords_buffer);	// [in] Previous frame pixel coordinates (after reprojection)
-    taa_kernel.setArg(arg_index++, tone_mapped_buffer);				// [in]	Current frame color buffer
+    taa_kernel.setArg(arg_index++, noisefree_1spp_acc_tonemapped);				// [in]	Current frame color buffer
     queue.finish();
 
     std::vector<clutils::GPUTimer<std::milli>> accum_noisy_timer;
@@ -523,7 +523,7 @@ int bmfr_opencl()
         queue.enqueueWriteBuffer(albedo_buffer, blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), albedos[frame].data());
         queue.enqueueWriteBuffer(*normals_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), normals[frame].data());
         queue.enqueueWriteBuffer(*positions_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), positions[frame].data());
-        queue.enqueueWriteBuffer(*noisy_1spp_color_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), noisy_input[frame].data());
+        queue.enqueueWriteBuffer(*noisy_1spp_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), noisy_input[frame].data());
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -536,8 +536,8 @@ int bmfr_opencl()
         accum_noisy_kernel.setArg(arg_index++, *normals_buffer.previous());			// [in]  Previous (world) normals
         accum_noisy_kernel.setArg(arg_index++, *positions_buffer.current());		// [in]  Current  world positions
         accum_noisy_kernel.setArg(arg_index++, *positions_buffer.previous());		// [in]  Previous world positions
-        accum_noisy_kernel.setArg(arg_index++, *noisy_1spp_color_buffer.current());	// [out] Current  noisy 1spp color
-        accum_noisy_kernel.setArg(arg_index++, *noisy_1spp_color_buffer.previous());// [in]  Previous noisy 1spp color
+        accum_noisy_kernel.setArg(arg_index++, *noisy_1spp_buffer.current());	// [out] Current  noisy 1spp color
+        accum_noisy_kernel.setArg(arg_index++, *noisy_1spp_buffer.previous());// [in]  Previous noisy 1spp color
         accum_noisy_kernel.setArg(arg_index++, *spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
         accum_noisy_kernel.setArg(arg_index++, *spp_buffer.current());				// [out] Current  number of samples accumulated (for CMA)
         accum_noisy_kernel.setArg(arg_index++, features_buffer);					// [out] Features buffer (half or single-precision)
@@ -558,7 +558,7 @@ int bmfr_opencl()
         arg_index = 3;
         weighted_sum_kernel.setArg(arg_index++, *normals_buffer.current());			 // [in] Current (world) normals
         weighted_sum_kernel.setArg(arg_index++, *positions_buffer.current());		 // [in] Current world positions
-        weighted_sum_kernel.setArg(arg_index++, *noisy_1spp_color_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
+        weighted_sum_kernel.setArg(arg_index++, *noisy_1spp_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
         weighted_sum_kernel.setArg(arg_index++, sizeof(cl_int), &frame);			 // [in] Current frame number
         queue.enqueueNDRangeKernel(weighted_sum_kernel, cl::NullRange, k_workset_global_size, k_local_size, nullptr, &weighted_sum_timer[frame].event());
 
@@ -566,8 +566,8 @@ int bmfr_opencl()
 		// -> accumulate noise-free color estimate + output a tonemapped version
         arg_index = 5;
         accum_filtered_kernel.setArg(arg_index++, *spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
-        accum_filtered_kernel.setArg(arg_index++, *noisefree_accumulated_color_estimate.previous()); // [in]  Previous frame noise-free accumulated color estimate 
-        accum_filtered_kernel.setArg(arg_index++, *noisefree_accumulated_color_estimate.current());	 // [out] Current frame noise-free accumulated color estimate
+        accum_filtered_kernel.setArg(arg_index++, *noisefree_1spp_accumulated.previous()); // [in]  Previous frame noise-free accumulated color estimate 
+        accum_filtered_kernel.setArg(arg_index++, *noisefree_1spp_accumulated.current());	 // [out] Current frame noise-free accumulated color estimate
         accum_filtered_kernel.setArg(arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
         queue.enqueueNDRangeKernel(accum_filtered_kernel, cl::NullRange, k_workset_global_size, k_local_size, nullptr, &accum_filtered_timer[matrix_index].event());
 
@@ -998,77 +998,86 @@ int bmfr_c_opencl(TmpData & tmpData)
 		assert(ret == CL_SUCCESS);
 	};
 
+	
+	// Albedo buffer (3 * float32) // TODO: compress this
+	const size_t albedo_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	cl_mem albedo_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, albedo_buffer_size, nullptr, &ret);
+	assert(ret == CL_SUCCESS);
+
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
 	// TODO: compress data? half? -> would require different storage than feature buffer
-	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT  * 3 * sizeof(cl_float));
+	const size_t normals_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, normals_buffer_size);
 
 	// World positions buffer (3 * float32)
 	// TODO: normalize in [0, 1] (or [-1, +1])
-	Double_buffer<cl_mem> positions_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+	const size_t positions_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	Double_buffer<cl_mem> positions_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, positions_buffer_size);
     
 	// Noisy 1spp color buffer (3 * float32)
-	Double_buffer<cl_mem> noisy_1spp_color_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
-
-	// Features buffer size
-	const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(cl_half) : sizeof(cl_float);
-	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size;
+	const size_t noisy_1spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	Double_buffer<cl_mem> noisy_1spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
+	const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
+	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * buffer_count * features_buffer_datatype_size;
 	cl_mem features_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Noise-free color estimate (3 * float32)
-	cl_mem noisefree_color_estimate = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float), nullptr, &ret);
+	const size_t noisefree_1spp_size = OUTPUT_SIZE * 3 * sizeof(float);
+	cl_mem noisefree_1spp = clCreateBuffer(context, CL_MEM_READ_WRITE, noisefree_1spp_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// TODO: why does the size of this buffer is WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT and not WORKSET_WIDTH x WORKSET_HEIGHT?
 	// -> it seems we are not writing/reading in the part of the buffer that is outside of image (because of offsets)
 	// (see kernel 'accumulate_filtered_data' that is the only kernel using it)
-	// --> should have the same size as 'tone_mapped_buffer'
+	// --> should have the same size as 'noisefree_1spp_acc_tonemapped'
 	// Noise-free accumulated color estimate (3 * float32)
-	Double_buffer<cl_mem> noisefree_accumulated_color_estimate = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(cl_float));
+	const size_t noisefree_1spp_accumulated_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(float);
+	Double_buffer<cl_mem> noisefree_1spp_accumulated = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
 
 	// Final antialiased color buffer (3 * float32)
-	Double_buffer<cl_mem> result_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * 3 * sizeof(cl_float));
+	const size_t result_buffer_size = OUTPUT_SIZE * 3 * sizeof(float);
+	Double_buffer<cl_mem> result_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, result_buffer_size);
 
 	// Previous frame pixel coordinates (after reprojection) (2 * float32)
-	cl_mem prev_frame_pixel_coords_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_float2), nullptr, &ret);
+	const size_t prev_frame_pixel_coords_buffer_size = OUTPUT_SIZE * 2 * sizeof(float);
+	cl_mem prev_frame_pixel_coords_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, prev_frame_pixel_coords_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
-	cl_mem prev_frame_bilinear_samples_validity_mask = clCreateBuffer(context, CL_MEM_READ_WRITE, OUTPUT_SIZE * sizeof(cl_uchar), nullptr, &ret);
-	assert(ret == CL_SUCCESS);
-
-	// Albedo buffer (3 * float32) // TODO: compress this
-	cl_mem albedo_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), nullptr, &ret);
+	const size_t prev_frame_bilinear_samples_validity_mask_size = OUTPUT_SIZE * sizeof(unsigned char);
+	cl_mem prev_frame_bilinear_samples_validity_mask = clCreateBuffer(context, CL_MEM_READ_WRITE, prev_frame_bilinear_samples_validity_mask_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
-	cl_mem tone_mapped_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), nullptr, &ret);
+	const size_t noisefree_1spp_acc_tonemapped_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	cl_mem noisefree_1spp_acc_tonemapped = clCreateBuffer(context, CL_MEM_READ_WRITE, noisefree_1spp_acc_tonemapped_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
 	//cl_mem features_weights_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * (buffer_count - 3) * 3 * sizeof(cl_float));
-	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(cl_float);
+	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (buffer_count - 3) * 3 * sizeof(float);
 	cl_mem features_weights_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_weights_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Min and max of features values per block (world_positions) (6 * 2 * float32)
 	//cl_mem features_min_max_buffer(context, CL_MEM_READ_WRITE, (FITTER_KERNEL_GLOBAL_RANGE / 256) * 6 * sizeof(cl_float2));
-	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * sizeof(cl_float2);
+	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * 2 * sizeof(float);
 	cl_mem features_min_max_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, features_min_max_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-	const size_t spp_buffer_size = OUTPUT_SIZE * sizeof(cl_char);
+	const size_t spp_buffer_size = OUTPUT_SIZE * sizeof(char);
 	Double_buffer<cl_mem> spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, spp_buffer_size);
 
 	std::vector<Double_buffer<cl_mem> *> all_double_buffers =
 	{
 		&normals_buffer,
 		&positions_buffer,
-		&noisy_1spp_color_buffer,
-		&noisefree_accumulated_color_estimate,
+		&noisy_1spp_buffer,
+		&noisefree_1spp_accumulated,
 		&result_buffer,
 		&spp_buffer
 	};
@@ -1124,11 +1133,11 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer);	// [in]  Min and max of features values per block (world_positions)
 	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &noisefree_color_estimate);	// [out] Noise-free color estimate
+	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp);	// [out] Noise-free color estimate
 	assert(ret == CL_SUCCESS);
 
 	arg_index = 0;
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_color_estimate);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	assert(ret == CL_SUCCESS);
 	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);				// [in]  Previous frame pixel coordinates (after reprojection)
 	assert(ret == CL_SUCCESS);
@@ -1136,13 +1145,13 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &albedo_buffer);								// [in]  Albedo buffer of the current frame (non-noisy)
 	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &tone_mapped_buffer);							// [out] Accumulated and tonemapped noise-free color estimate
+	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped);							// [out] Accumulated and tonemapped noise-free color estimate
 	assert(ret == CL_SUCCESS);
 
 	arg_index = 0;
 	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);	// [in] Previous frame pixel coordinates (after reprojection)
 	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &tone_mapped_buffer);				// [in]	Current frame color buffer
+	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped);				// [in]	Current frame color buffer
 	assert(ret == CL_SUCCESS);
 
 	printf("Run and profile kernels.\n");
@@ -1166,13 +1175,13 @@ int bmfr_c_opencl(TmpData & tmpData)
 		const cl_bool blocking_write = true;
 		// https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/clEnqueueWriteBuffer.html
 		// Enqueue commands to write to a buffer object from host memory (= cudaMemcpy(..., cudaMemcpyHostToDevice))
-		ret = clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), albedos[frame].data(), 0, nullptr, nullptr);
+		ret = clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, albedo_buffer_size, albedos[frame].data(), 0, nullptr, nullptr);
 		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), normals[frame].data(), 0, nullptr, nullptr);
+		ret = clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, normals_buffer_size, normals[frame].data(), 0, nullptr, nullptr);
 		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), positions[frame].data(), 0, nullptr, nullptr);
+		ret = clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, positions_buffer_size, positions[frame].data(), 0, nullptr, nullptr);
 		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *noisy_1spp_color_buffer.current(), blocking_write, 0, IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float), noisy_input[frame].data(), 0, nullptr, nullptr);
+		ret = clEnqueueWriteBuffer(command_queue, *noisy_1spp_buffer.current(), blocking_write, 0, noisy_1spp_buffer_size, noisy_input[frame].data(), 0, nullptr, nullptr);
 		assert(ret == CL_SUCCESS);
 
 		// Phase I:
@@ -1190,9 +1199,9 @@ int bmfr_c_opencl(TmpData & tmpData)
 		assert(ret == CL_SUCCESS);
 		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.previous());		// [in]  Previous world positions
 		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.current());	// [out] Current  noisy 1spp color
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current());	// [out] Current  noisy 1spp color
 		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.previous());// [in]  Previous noisy 1spp color
+		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.previous());// [in]  Previous noisy 1spp color
 		assert(ret == CL_SUCCESS);
 		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
 		assert(ret == CL_SUCCESS);
@@ -1239,53 +1248,13 @@ int bmfr_c_opencl(TmpData & tmpData)
 		ret = clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
 
-		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
-		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
-		{
-			size_t normals_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
-			tmpData.normals.resize(normals_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_size, tmpData.normals.data(), 0, NULL, NULL);
-
-			size_t positions_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
-			tmpData.positions.resize(positions_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_size, tmpData.positions.data(), 0, NULL, NULL);
-
-			size_t noisy1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(cl_float);
-			tmpData.noisy_1spp.resize(noisy1spp_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_color_buffer.current(), false, 0, noisy1spp_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
-
-			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
-
-			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
-			ret = clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL);
-
-			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_weights_buffer, false, 0, features_weights_buffer_size, tmpData.features_weights_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
-
-			tmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_min_max_buffer, false, 0, features_min_max_buffer_size, tmpData.features_min_max_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
-
-			ret = clFlush(command_queue);
-			assert(ret == CL_SUCCESS);
-			ret = clFinish(command_queue);
-			assert(ret == CL_SUCCESS);
-			
-			return 0;
-		}
-		#endif
-
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 		arg_index = 3;
 		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current());			 // [in] Current (world) normals
 		assert(ret == CL_SUCCESS);
 		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current());		 // [in] Current world positions
 		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_color_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
+		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
 		assert(ret == CL_SUCCESS);
 		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame);			 // [in] Current frame number
 		assert(ret == CL_SUCCESS);
@@ -1297,9 +1266,9 @@ int bmfr_c_opencl(TmpData & tmpData)
 		arg_index = 5;
 		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
 		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_accumulated_color_estimate.previous()); // [in]  Previous frame noise-free accumulated color estimate 
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.previous()); // [in]  Previous frame noise-free accumulated color estimate 
 		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_accumulated_color_estimate.current());	 // [out] Current frame noise-free accumulated color estimate
+		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.current());	 // [out] Current frame noise-free accumulated color estimate
 		assert(ret == CL_SUCCESS);
 		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
 		assert(ret == CL_SUCCESS);
@@ -1316,6 +1285,68 @@ int bmfr_c_opencl(TmpData & tmpData)
 		assert(ret == CL_SUCCESS);
 		ret = clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
+
+				#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			tmpData.normals.resize(normals_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_buffer_size, tmpData.normals.data(), 0, NULL, NULL);
+
+			tmpData.positions.resize(positions_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_buffer_size, tmpData.positions.data(), 0, NULL, NULL);
+
+			tmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_buffer.current(), false, 0, noisy_1spp_buffer_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, prev_frame_pixel_coords_buffer, false, 0, prev_frame_pixel_coords_buffer_size, tmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.prev_frame_bilinear_samples_validity_mask.resize(prev_frame_bilinear_samples_validity_mask_size / sizeof(unsigned char));
+			ret = clEnqueueReadBuffer(command_queue, prev_frame_bilinear_samples_validity_mask, false, 0, prev_frame_bilinear_samples_validity_mask_size, tmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
+			ret = clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_weights_buffer, false, 0, features_weights_buffer_size, tmpData.features_weights_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, features_min_max_buffer, false, 0, features_min_max_buffer_size, tmpData.features_min_max_buffer.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, noisefree_1spp, false, 0, noisefree_1spp_size, tmpData.noisefree_1spp.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *noisefree_1spp_accumulated.current(), false, 0, noisefree_1spp_accumulated_size, tmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, noisefree_1spp_acc_tonemapped, false, 0, noisefree_1spp_acc_tonemapped_size, tmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			tmpData.result.resize(result_buffer_size / sizeof(float));
+			ret = clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, result_buffer_size, tmpData.result.data(), 0, NULL, NULL);
+			assert(ret == CL_SUCCESS);
+
+			ret = clFlush(command_queue);
+			assert(ret == CL_SUCCESS);
+			ret = clFinish(command_queue);
+			assert(ret == CL_SUCCESS);
+			
+			return 0;
+		}
+		#endif
 
 		// This is not timed because in real use case the result is stored to frame buffer
 		ret = clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, OUTPUT_SIZE * 3 * sizeof(cl_float), out_data[frame].data(), 0, NULL, NULL);
@@ -1344,12 +1375,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 	FreeDoubleBuffer(normals_buffer);
 	FreeDoubleBuffer(positions_buffer);
-	FreeDoubleBuffer(noisy_1spp_color_buffer);
+	FreeDoubleBuffer(noisy_1spp_buffer);
 	ret = clReleaseMemObject(features_buffer);
 	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(noisefree_color_estimate);
+	ret = clReleaseMemObject(noisefree_1spp);
 	assert(ret == CL_SUCCESS);
-	FreeDoubleBuffer(noisefree_accumulated_color_estimate);
+	FreeDoubleBuffer(noisefree_1spp_accumulated);
 	FreeDoubleBuffer(result_buffer);
 	ret = clReleaseMemObject(prev_frame_pixel_coords_buffer);
 	assert(ret == CL_SUCCESS);
@@ -1357,7 +1388,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 	ret = clReleaseMemObject(albedo_buffer);
 	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(tone_mapped_buffer);
+	ret = clReleaseMemObject(noisefree_1spp_acc_tonemapped);
 	assert(ret == CL_SUCCESS);
 	ret = clReleaseMemObject(features_weights_buffer);
 	assert(ret == CL_SUCCESS);
