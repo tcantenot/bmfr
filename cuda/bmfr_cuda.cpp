@@ -45,6 +45,11 @@
 #define SCALED_FEATURE_BUFFERS_STR ""
 #endif
 
+// These local sizes are used with 2D kernels which do not require spesific local size
+// (Global sizes are always a multiple of 32)
+#define LOCAL_WIDTH 8
+#define LOCAL_HEIGHT 8
+
 #define OUTPUT_SIZE (WORKSET_WIDTH * WORKSET_HEIGHT)
 
 // Fitter kernel global range
@@ -204,33 +209,37 @@ int bmfr_cuda(TmpData & tmpData)
 		return true;
 	};
 
-
-	printf("Done loading data.\n");
-
 	// Create CUDA buffers
 
 	printf("\nAllocate CUDA buffers\n");
 
+	const size_t w = IMAGE_WIDTH;
+	const size_t h = IMAGE_HEIGHT;
+
 	size_t cudaBufferTotalSize = 0;
 
 	// Albedo buffer (3 * float32) // TODO: compress this
-	const size_t albedo_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc albedoBufferDesc = GetAlbedoBufferDesc(w, h);
+	const size_t albedo_buffer_size = albedoBufferDesc.byte_size;
     DeviceBuffer albedo_buffer(albedo_buffer_size);
 	cudaBufferTotalSize += albedo_buffer_size;
 
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
-	const size_t normals_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc normalsBufferDesc = GetNormalsBufferDesc(w, h);
+	const size_t normals_buffer_size = normalsBufferDesc.byte_size;
     Double_buffer<DeviceBuffer> normals_buffer(normals_buffer_size);
 	cudaBufferTotalSize += 2 * normals_buffer_size;
 
 	// World positions buffer (3 * float32)
 	// TODO: normalize in [0, 1] (or [-1, +1])
-	const size_t positions_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
+	const size_t positions_buffer_size = positionsBufferDesc.byte_size;
     Double_buffer<DeviceBuffer> positions_buffer(positions_buffer_size);
 	cudaBufferTotalSize += 2 * positions_buffer_size;
     
 	// Noisy 1spp color buffer (3 * float32)
-	const size_t noisy_1spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
+	const size_t noisy_1spp_buffer_size = noisy1sppBufferDesc.byte_size;
 	Double_buffer<DeviceBuffer> noisy_1spp_buffer(noisy_1spp_buffer_size);
 	cudaBufferTotalSize += 2 * noisy_1spp_buffer_size;
 
@@ -241,32 +250,38 @@ int bmfr_cuda(TmpData & tmpData)
 	cudaBufferTotalSize += features_buffer_size;
 
 	// Noise-free color estimate (3 * float32)
-	const size_t noisefree_1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc noiseFree1sppBufferDesc = GetNoiseFree1sppBufferDesc(w, h);
+	const size_t noisefree_1spp_size = noiseFree1sppBufferDesc.byte_size;
     DeviceBuffer noisefree_1spp(noisefree_1spp_size);
 	cudaBufferTotalSize += noisefree_1spp_size;
 
 	// Noise-free accumulated color estimate (3 * float32)
-	const size_t noisefree_1spp_accumulated_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc noiseFree1sppAccumulatedBufferDesc = GetNoiseFree1sppAccumulatedBufferDesc(w, h);
+	const size_t noisefree_1spp_accumulated_size = noiseFree1sppAccumulatedBufferDesc.byte_size;
     Double_buffer<DeviceBuffer> noisefree_1spp_accumulated(noisefree_1spp_accumulated_size);
 	cudaBufferTotalSize += 2 * noisefree_1spp_accumulated_size;
 
 	// Final antialiased color buffer (3 * float32)
-	const size_t result_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc resultBufferDesc = GetResultBufferDesc(w, h);
+	const size_t result_buffer_size = resultBufferDesc.byte_size;
     Double_buffer<DeviceBuffer> result_buffer(result_buffer_size);
 	cudaBufferTotalSize += 2 * result_buffer_size;
 
 	// Previous frame pixel coordinates (after reprojection) (2 * float32)
-	const size_t prev_frame_pixel_coords_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 2 * sizeof(float);
+	const BufferDesc prevFramePixelCoordsBufferDesc = GetPrevFramePixelCoordsBufferDesc(w, h);
+	const size_t prev_frame_pixel_coords_buffer_size = prevFramePixelCoordsBufferDesc.byte_size;
     DeviceBuffer prev_frame_pixel_coords_buffer(prev_frame_pixel_coords_buffer_size);
 	cudaBufferTotalSize += prev_frame_pixel_coords_buffer_size;
 
 	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
-	const size_t prev_frame_bilinear_samples_validity_mask_size = IMAGE_WIDTH * IMAGE_HEIGHT * sizeof(unsigned char);
+	const BufferDesc prevFrameBilinearSamplesValidityMaskBufferDesc = GetPrevFrameBilinearSamplesValidityMaskBufferDesc(w, h);
+	const size_t prev_frame_bilinear_samples_validity_mask_size = prevFrameBilinearSamplesValidityMaskBufferDesc.byte_size;
     DeviceBuffer prev_frame_bilinear_samples_validity_mask(prev_frame_bilinear_samples_validity_mask_size);
 	cudaBufferTotalSize += prev_frame_bilinear_samples_validity_mask_size;
 
 	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
-	const size_t noisefree_1spp_acc_tonemapped_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
+	const BufferDesc noiseFree1sppAccTonemappedBufferDesc = GetNoiseFree1sppAccTonemappedBufferDesc(w, h);
+	const size_t noisefree_1spp_acc_tonemapped_size = noiseFree1sppAccTonemappedBufferDesc.byte_size;
     DeviceBuffer noisefree_1spp_acc_tonemapped(noisefree_1spp_acc_tonemapped_size);
 	cudaBufferTotalSize += noisefree_1spp_acc_tonemapped_size;
 
@@ -281,7 +296,8 @@ int bmfr_cuda(TmpData & tmpData)
 	cudaBufferTotalSize += features_min_max_buffer_size;
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-	const size_t spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * sizeof(char);
+	const BufferDesc sppBufferDesc = GetSppBufferDesc(w, h);
+	const size_t spp_buffer_size = sppBufferDesc.byte_size;
     Double_buffer<DeviceBuffer> spp_buffer(spp_buffer_size);
 	cudaBufferTotalSize += 2 * spp_buffer_size;
 
@@ -319,35 +335,36 @@ int bmfr_cuda(TmpData & tmpData)
     const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(vec3);
 	#endif
 
-    printf("\nRun and profile kernels.\n");
+    printf("\nRun kernels.\n");
+
 
 	// Only work with 3 channels float32 image
 	const auto SaveDevice3Float32ImageToDisk = [](
 		std::string const & filename,
 		int frame,
 		DeviceBuffer const & buffer,
-		size_t w, size_t h
+		BufferDesc const & desc
 	)
 	{
-		assert(buffer.size == w * h * 3 * sizeof(float));
-		const size_t numelem  = buffer.size / sizeof(float);
-		const size_t datasize = buffer.size;
+		assert(buffer.size == desc.w * desc.h * 3 * sizeof(float));
+		const size_t datasize = desc.byte_size;
+		const size_t numelem  = datasize / sizeof(float);
 		std::vector<float> outdata;
 		outdata.resize(numelem);
 
 		K_CUDA_CHECK(cudaMemcpy(outdata.data(), buffer.data, datasize, cudaMemcpyDeviceToHost));
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-		std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + ".png";
+		std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + "_cuda.png";
 
 		 // Output image
 		printf("  Save image %s\n", output_filename.c_str());
 
-        OpenImageIO::ImageSpec spec(w, h, 3, OpenImageIO::TypeDesc::FLOAT);
+        OpenImageIO::ImageSpec spec(desc.w, desc.h, 3, OpenImageIO::TypeDesc::FLOAT);
         std::unique_ptr<OpenImageIO::ImageOutput> out(OpenImageIO::ImageOutput::create(output_filename));
         if(out && out->open(output_filename, spec))
         {
-            out->write_image(OpenImageIO::TypeDesc::FLOAT, outdata.data(), 3 * sizeof(float), w * 3 * sizeof(float), 0);
+            out->write_image(OpenImageIO::TypeDesc::FLOAT, outdata.data(), desc.x_stride, desc.y_stride, 0);
             out->close();
         }
         else
@@ -414,7 +431,9 @@ int bmfr_cuda(TmpData & tmpData)
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, *noisy_1spp_buffer.current(), IMAGE_WIDTH, IMAGE_HEIGHT);
+		#if SAVE_INTERMEDIARY_BUFFERS
+		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, *noisy_1spp_buffer.current(), noisy1sppBufferDesc);
+		#endif
 
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weights
@@ -474,7 +493,9 @@ int bmfr_cuda(TmpData & tmpData)
 
 		K_CUDA_CHECK(cudaDeviceSynchronize());
 
-		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, noisefree_1spp, IMAGE_WIDTH, IMAGE_HEIGHT);
+		#if SAVE_INTERMEDIARY_BUFFERS
+		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, noisefree_1spp, noiseFree1sppBufferDesc);
+		#endif
 
 		// Phase III: Postprocessing
 		// -> accumulate noise-free color estimate + output a tonemapped version
@@ -500,7 +521,9 @@ int bmfr_cuda(TmpData & tmpData)
 			frame
 		);
 
-		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, *noisefree_1spp_accumulated.current(), IMAGE_WIDTH, IMAGE_HEIGHT);
+		#if SAVE_INTERMEDIARY_BUFFERS
+		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, *noisefree_1spp_accumulated.current(), noiseFree1sppAccumulatedBufferDesc);
+		#endif
 
 		// Phase III: Temporal antialiasing
 
@@ -569,7 +592,7 @@ int bmfr_cuda(TmpData & tmpData)
 		}
 		#endif
 
-		SaveDevice3Float32ImageToDisk("result", frame, *result_buffer.current(), IMAGE_WIDTH, IMAGE_HEIGHT);
+		SaveDevice3Float32ImageToDisk("result", frame, *result_buffer.current(), resultBufferDesc);
 
 		// Swap all double buffers
         std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<DeviceBuffer>::swap, std::placeholders::_1));

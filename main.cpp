@@ -1,4 +1,5 @@
 #include "opencl/bmfr.hpp"
+#include "opencl/bmfr_c_opencl.hpp"
 #include "cuda/bmfr_cuda.hpp"
 
 #include <assert.h>
@@ -11,6 +12,7 @@
 int main()
 {
 	TmpData cuda_tmp_data, opencl_tmp_data;
+	//bmfr_c_opencl(opencl_tmp_data);
 	bmfr_cuda(cuda_tmp_data);
 
 #if !ENABLE_DEBUG_OUTPUT_TMP_DATA
@@ -81,6 +83,7 @@ int main()
 	CheckDiffFloat("noisy_1spp", cuda_tmp_data.noisy_1spp, opencl_tmp_data.noisy_1spp);
 	CheckDiffFloat("prev_frame_pixel_coords_buffer", cuda_tmp_data.prev_frame_pixel_coords_buffer, opencl_tmp_data.prev_frame_pixel_coords_buffer);
 	
+#if 0
 	assert(cuda_tmp_data.prev_frame_bilinear_samples_validity_mask.size() == opencl_tmp_data.prev_frame_bilinear_samples_validity_mask.size());
 	for(int i = 0; i < cuda_tmp_data.prev_frame_bilinear_samples_validity_mask.size(); ++i)
 	{
@@ -98,6 +101,7 @@ int main()
 			printf("spp[%d]: %d != %d\n", i, (int)cuda_tmp_data.spp[i], (int)opencl_tmp_data.spp[i]);
 		}
 	}
+#endif
 	
 	CheckDiffFloat("min_max", cuda_tmp_data.features_min_max_buffer, opencl_tmp_data.features_min_max_buffer);
 	CheckDiffFloat("features_buffer", cuda_tmp_data.features_buffer, opencl_tmp_data.features_buffer);

@@ -158,6 +158,7 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
     <CudaCompile />
     <CudaCompile>
       <CodeGeneration>compute_20,compute_20</CodeGeneration>
+      <Optimization>Od</Optimization>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -206,6 +207,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClCompile Include="..\cuda\bmfr_cuda.cpp" />
     <ClCompile Include="..\main.cpp" />
     <ClCompile Include="bmfr.cpp" />
+    <ClCompile Include="bmfr_c_opencl.cpp" />
     <ClCompile Include="CLUtils\CLUtils.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -214,6 +216,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="..\cuda\bmfr_cuda.hpp" />
     <ClInclude Include="..\matlab\data\frames\camera_matrices.h" />
     <ClInclude Include="bmfr.hpp" />
+    <ClInclude Include="bmfr_c_opencl.hpp" />
     <ClInclude Include="CLUtils\CLUtils.hpp" />
   </ItemGroup>
   <ItemGroup>

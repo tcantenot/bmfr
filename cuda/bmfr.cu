@@ -335,24 +335,30 @@ inline __device__ half2 FloatToHalf(vec2 v)
 }
 #endif
 
-inline __device__ int FloatToIntRn(float x)
+inline __device__ int FloatToIntRd(float x)
 {
-	return __float2int_rn(x);
+	return __float2int_rd(x);
 }
 
-inline __device__ ivec2 FloatToIntRn(vec2 v)
+inline __device__ ivec2 FloatToIntRd(vec2 v)
 {
-	return ivec2(__float2int_rn(v.x), __float2int_rn(v.y));
+	return ivec2(__float2int_rd(v.x), __float2int_rd(v.y));
 }
 
-inline __device__ ivec3 FloatToIntRn(vec3 v)
+inline __device__ ivec3 FloatToIntRd(vec3 v)
 {
-	return ivec3(__float2int_rn(v.x), __float2int_rn(v.y), __float2int_rn(v.z));
+	return ivec3(__float2int_rd(v.x), __float2int_rd(v.y), __float2int_rd(v.z));
 }
 
-inline __device__ ivec4 FloatToIntRn(vec4 v)
+inline __device__ ivec4 FloatToIntRd(vec4 v)
 {
-	return ivec4(__float2int_rn(v.x), __float2int_rn(v.y), __float2int_rn(v.z), __float2int_rn(v.w));
+	return ivec4(__float2int_rd(v.x), __float2int_rd(v.y), __float2int_rd(v.z), __float2int_rd(v.w));
+}
+
+inline __device__ unsigned char convert_uchar_sat_rte(float x)
+{
+	unsigned int u = __float2uint_rn(x);
+	return static_cast<unsigned char>(Min(Max(u, 0u), 255u));
 }
 
 // Load/store vec3 functions /////////////////////////////////////////////////
@@ -489,22 +495,15 @@ __global__ void accumulate_noisy_data(
 		// TODO: try to remove this
 		prev_frame_pixel_f -= vec2(pixel_offset.x, 1 - pixel_offset.y);
 
-		// Convert into integer pixel coordinates (round to nearest)
-		ivec2 prev_frame_pixel_i = FloatToIntRn(prev_frame_pixel_f);
+		// Convert into integer pixel coordinates (round down)
+		const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
 
 		// Compute bilinear weights (for bilinear sampling)
 		// TODO: implement bicubic Catmull-Rom (for sharpness)? => would need to perform more fetches and store more "validity bits" in mask
 		const ivec2 offsets[4] = { ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1) };
 
-		vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
-
-		// /!\ We need to saturate here because otherwise the sum of the weights isn't equal to 1
-		// TODO: try to use Fract
-		prev_pixel_fract.x = Clamp(prev_pixel_fract.x, 0.f, 1.f); // Saturate
-		prev_pixel_fract.y = Clamp(prev_pixel_fract.y, 0.f, 1.f); // Saturate
-		vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
-		//one_minus_prev_pixel_fract.x = Clamp(one_minus_prev_pixel_fract.x, 0.f, 1.f); // Saturate
-		//one_minus_prev_pixel_fract.y = Clamp(one_minus_prev_pixel_fract.y, 0.f, 1.f); // Saturate
+		const vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+		const vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
 
 		float weights[4];
 		weights[0] = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
@@ -601,11 +600,10 @@ __global__ void accumulate_noisy_data(
 		// the threshold BLEND_ALPHA that switch to exponential moving average).
 		// E.g: BLEND_ALPHA = 0.2 = 1 / (n + 1) <=> n = (1 - 0.2) / 0.2 = 4 => above 4 samples for a pixel, we switch to
 		// exponential moving average with alpha = 20%
-		new_spp = (sample_spp > 254.f) ? 255 : static_cast<unsigned char>(sample_spp) + 1;
+		new_spp = (sample_spp > 254.f) ? 255 : convert_uchar_sat_rte(sample_spp) + 1;
 	}
 
 	vec3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // Lerp(previous_color, current_color, blend_alpha);
-
 
 	// The set of feature buffers used in the fitting
 	float features[BUFFER_COUNT] =
@@ -1234,18 +1232,12 @@ __global__ void accumulate_filtered_data(
 			const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
 			
 			// Integer pixel coordinates in the previous frame
-			const ivec2 prev_frame_pixel_i = FloatToIntRn(prev_frame_pixel_f);
+			const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
 
 			// Compute bilinear weights for bilinear sampling
-			vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
-			// /!\ We need to saturate here because otherwise the sum of the weights isn't equal to 1
-			// TODO: try to use Fract
-			prev_pixel_fract.x = Clamp(prev_pixel_fract.x, 0.f, 1.f); // Saturate
-			prev_pixel_fract.y = Clamp(prev_pixel_fract.y, 0.f, 1.f); // Saturate
-			vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
-			//one_minus_prev_pixel_fract.x = Clamp(one_minus_prev_pixel_fract.x, 0.f, 1.f); // Saturate
-			//one_minus_prev_pixel_fract.y = Clamp(one_minus_prev_pixel_fract.y, 0.f, 1.f); // Saturate
-			
+			const vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+			const vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+
 			float total_weight = 0.f;
 
 			// Add valid bilinear samples
@@ -1370,7 +1362,7 @@ __global__ void taa(
 
 	// Previous frame pixel coordinates
 	const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
-	ivec2 prev_frame_pixel_i = FloatToIntRn(prev_frame_pixel_f);
+	const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
 
 	//!!!!!!
 	// Add "|| true" to debug other kernels (removes taa)
@@ -1422,10 +1414,8 @@ __global__ void taa(
 	// Note: work-item has already returned if the sampling location is completly out of image
 	vec3 prev_color = vec3(0.f, 0.f, 0.f);
 	float total_weight = 0;
-	vec2 pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
-	pixel_fract.x = Clamp(pixel_fract.x, 0.f, 1.f); // Saturate
-	pixel_fract.y = Clamp(pixel_fract.y, 0.f, 1.f); // Saturate
-	vec2 one_minus_pixel_fract = 1.f - pixel_fract;
+	const vec2 pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+	const vec2 one_minus_pixel_fract = 1.f - pixel_fract;
 
 	if(prev_frame_pixel_i.y >= 0)
 	{

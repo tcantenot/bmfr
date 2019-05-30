@@ -11,6 +11,9 @@
     <ClCompile Include="..\cuda\bmfr_cuda.cpp">
       <Filter>Cuda</Filter>
     </ClCompile>
+    <ClCompile Include="bmfr_c_opencl.cpp">
+      <Filter>OpenCL</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\matlab\data\frames\camera_matrices.h" />
@@ -27,6 +30,9 @@
       <Filter>Cuda</Filter>
     </ClInclude>
     <ClInclude Include="..\Common.hpp" />
+    <ClInclude Include="bmfr_c_opencl.hpp">
+      <Filter>OpenCL</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="OpenCL">

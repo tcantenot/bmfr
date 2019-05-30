@@ -183,6 +183,11 @@ inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
 
 
 // ### Edit these defines if you want to experiment different parameters ###
+
+// Parameters used to determined the validity of reprojected samples
+#define POSITION_LIMIT_SQUARED 0.010000f
+#define NORMAL_LIMIT_SQUARED 1.000000f
+
 // The amount of noise added to feature buffers to cancel sigularities
 #define NOISE_AMOUNT 1e-2f
 
@@ -213,6 +218,8 @@ world_position.z*world_position.z
 #define SCALED_FEATURE_BUFFERS
 #endif
 
+#define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
+
 #define FEATURES_NOT_SCALED 4
 
 #if USE_SCALED_FEATURES
@@ -222,20 +229,22 @@ world_position.z*world_position.z
 #endif
 
 #define BUFFER_COUNT (FEATURES_NOT_SCALED + FEATURES_SCALED + 3)
+
+#define R_EDGE (BUFFER_COUNT - 2)
+
+// 256 is the maximum local size on AMD GCN
+// Synchronization within 32x32=1024 block requires unrolling four times
+#define LOCAL_SIZE 256
+
+////////////////////////////////////////////////////////////////////////////////
+// TODO: Data to send via constants
+
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 
 // Rounds image sizes up to next multiple of BLOCK_EDGE_LENGTH
 #define WORKSET_WIDTH  (BLOCK_EDGE_LENGTH * ((IMAGE_WIDTH  + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
 #define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-
-#define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
-
-// These local sizes are used with 2D kernels which do not require spesific local size
-// (Global sizes are always a multiple of 32)
-#define LOCAL_WIDTH 8
-#define LOCAL_HEIGHT 8
-
 
 // We need a margin of one block (BLOCK_EDGE_LENGTH) because we are offsetting the blocks
 // at most one block to the left or the right to avoid blocky artifacts.
@@ -268,26 +277,20 @@ world_position.z*world_position.z
 // Number of block in the workset with margin
 #define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
 
-#define R_EDGE (BUFFER_COUNT - 2)
-
-#define POSITION_LIMIT_SQUARED 0.010000f
-#define NORMAL_LIMIT_SQUARED 1.000000f
 
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated
-#define COMPRESSED_R 0
+#define COMPRESSED_R 1
 
 // If 1 stores tmp_data to private memory when it is loaded for dot product calculation
-#define CACHE_TMP_DATA 0
+#define CACHE_TMP_DATA 1
 
 // If 1 features_data buffer is in half precision for faster load and store.
 // NOTE: if world position values are greater than 256 this cannot be used because
 // 256*256 is infinity in half-precision
 #define USE_HALF_PRECISION_IN_FEATURES_DATA 0
 
-// 256 is the maximum local size on AMD GCN
-// Synchronization within 32x32=1024 block requires unrolling four times
-#define LOCAL_SIZE 256
+
 
 #define K_RESTRICT
 
