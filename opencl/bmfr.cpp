@@ -1025,29 +1025,25 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 
 	// Noise-free color estimate (3 * float32)
-	const size_t noisefree_1spp_size = OUTPUT_SIZE * 3 * sizeof(float);
+	const size_t noisefree_1spp_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
 	cl_mem noisefree_1spp = clCreateBuffer(context, CL_MEM_READ_WRITE, noisefree_1spp_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
-	// TODO: why does the size of this buffer is WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT and not WORKSET_WIDTH x WORKSET_HEIGHT?
-	// -> it seems we are not writing/reading in the part of the buffer that is outside of image (because of offsets)
-	// (see kernel 'accumulate_filtered_data' that is the only kernel using it)
-	// --> should have the same size as 'noisefree_1spp_acc_tonemapped'
 	// Noise-free accumulated color estimate (3 * float32)
-	const size_t noisefree_1spp_accumulated_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * 3 * sizeof(float);
+	const size_t noisefree_1spp_accumulated_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
 	Double_buffer<cl_mem> noisefree_1spp_accumulated = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
 
 	// Final antialiased color buffer (3 * float32)
-	const size_t result_buffer_size = OUTPUT_SIZE * 3 * sizeof(float);
+	const size_t result_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 3 * sizeof(float);
 	Double_buffer<cl_mem> result_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, result_buffer_size);
 
 	// Previous frame pixel coordinates (after reprojection) (2 * float32)
-	const size_t prev_frame_pixel_coords_buffer_size = OUTPUT_SIZE * 2 * sizeof(float);
+	const size_t prev_frame_pixel_coords_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * 2 * sizeof(float);
 	cl_mem prev_frame_pixel_coords_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE, prev_frame_pixel_coords_buffer_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
 	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
-	const size_t prev_frame_bilinear_samples_validity_mask_size = OUTPUT_SIZE * sizeof(unsigned char);
+	const size_t prev_frame_bilinear_samples_validity_mask_size = IMAGE_WIDTH * IMAGE_HEIGHT * sizeof(unsigned char);
 	cl_mem prev_frame_bilinear_samples_validity_mask = clCreateBuffer(context, CL_MEM_READ_WRITE, prev_frame_bilinear_samples_validity_mask_size, nullptr, &ret);
 	assert(ret == CL_SUCCESS);
 
@@ -1069,7 +1065,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 	assert(ret == CL_SUCCESS);
 
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-	const size_t spp_buffer_size = OUTPUT_SIZE * sizeof(char);
+	const size_t spp_buffer_size = IMAGE_WIDTH * IMAGE_HEIGHT * sizeof(char);
 	Double_buffer<cl_mem> spp_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, spp_buffer_size);
 
 	std::vector<Double_buffer<cl_mem> *> all_double_buffers =
@@ -1286,7 +1282,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		ret = clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
 		assert(ret == CL_SUCCESS);
 
-				#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
 		{
 			tmpData.normals.resize(normals_buffer_size / sizeof(float));

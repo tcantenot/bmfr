@@ -517,13 +517,14 @@ __global__ void accumulate_noisy_data(
 		for(int i = 0; i < 4; ++i)
 		{
 			ivec2 sample_location = prev_frame_pixel_i + offsets[i];
-			int linear_sample_location = sample_location.y * IMAGE_WIDTH + sample_location.x;
 
 			// Check if previous frame color can be used based on its screen location
 			if(sample_location.x >= 0 && sample_location.y >= 0 &&
 			   sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT
 			)
 			{
+				const int linear_sample_location = sample_location.y * IMAGE_WIDTH + sample_location.x;
+
 				// Fetch previous frame world position
 				vec3 prev_world_position = load_float3(previous_positions, linear_sample_location);
 
@@ -602,7 +603,6 @@ __global__ void accumulate_noisy_data(
 		// exponential moving average with alpha = 20%
 		new_spp = (sample_spp > 254.f) ? 255 : static_cast<unsigned char>(sample_spp) + 1;
 	}
-	current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
 
 	vec3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // Lerp(previous_color, current_color, blend_alpha);
 
@@ -666,6 +666,7 @@ __global__ void accumulate_noisy_data(
 		store_float3(current_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
 		out_prev_frame_pixel[linear_pixel] = prev_frame_pixel_f; // Previous frame pixel coordinates (to sample history)
 		accept_bools[linear_pixel] = store_accept; // "Previous frame bilinear samples validity" bitmask
+		current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
 
 		// Kernel debug: stored in current_noisy buffer
 		#if 0
@@ -1422,6 +1423,8 @@ __global__ void taa(
 	vec3 prev_color = vec3(0.f, 0.f, 0.f);
 	float total_weight = 0;
 	vec2 pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+	pixel_fract.x = Clamp(pixel_fract.x, 0.f, 1.f); // Saturate
+	pixel_fract.y = Clamp(pixel_fract.y, 0.f, 1.f); // Saturate
 	vec2 one_minus_pixel_fract = 1.f - pixel_fract;
 
 	if(prev_frame_pixel_i.y >= 0)
