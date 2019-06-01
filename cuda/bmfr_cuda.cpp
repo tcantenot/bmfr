@@ -12,7 +12,7 @@
 // TODO detect FRAME_COUNT from the input files
 //#define FRAME_COUNT 1
 // Location where input frames and feature buffers are located
-#define INPUT_DATA_PATH ../data/classroom/inputs
+#define INPUT_DATA_PATH ../data/living-room/inputs
 #define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
 // camera_matrices.h is expected to be in the same folder
 #include STR(INPUT_DATA_PATH/camera_matrices.h)
@@ -55,6 +55,14 @@
 // Fitter kernel global range
 #define FITTER_KERNEL_GLOBAL_RANGE (LOCAL_SIZE * WORKSET_WITH_MARGIN_BLOCK_COUNT)
 
+
+#define LOG(...) printf(__VA_ARGS__)
+
+#if 0
+#define DEBUG_LOG(...) LOG(__VA_ARGS__)
+#else
+#define DEBUG_LOG(...) (void)0
+#endif
 
 // Creates two same buffers and swap() call can be used to change which one is considered
 // current and which one previous
@@ -113,11 +121,11 @@ static inline float clamp(float value, float minimum, float maximum)
 
 #define K_CUDA_CHECK(cudaFunc) \
 	do { \
-		/*printf(#cudaFunc "\n");\*/ \
+		/*LOG(#cudaFunc "\n");\*/ \
 		cudaError_t ret = cudaFunc; \
 		if(ret != cudaSuccess) \
 		{ \
-			printf("Cuda error: %d\n", ret); \
+			LOG("Cuda error: %d\n", ret); \
 			__debugbreak(); \
 		} \
 	} while(0)
@@ -143,6 +151,44 @@ struct DeviceBuffer
 
 	void * data = nullptr;
 	size_t size = 0;
+};
+
+class CudaTimer
+{
+	public:
+		CudaTimer()
+		{
+			K_CUDA_CHECK(cudaEventCreate(&m_start));
+			K_CUDA_CHECK(cudaEventCreate(&m_stop));
+		}
+
+		~CudaTimer()
+		{
+			K_CUDA_CHECK(cudaEventDestroy(m_start));
+			K_CUDA_CHECK(cudaEventDestroy(m_stop));
+		}
+
+		void start()
+		{
+			K_CUDA_CHECK(cudaEventRecord(m_start));
+		}
+
+		void stop()
+		{
+			K_CUDA_CHECK(cudaEventRecord(m_stop));
+		}
+
+		float elaspedTime()
+		{
+			K_CUDA_CHECK(cudaEventSynchronize(m_stop));
+			float elaspedTime_ms = 0.f;
+			K_CUDA_CHECK(cudaEventElapsedTime(&elaspedTime_ms, m_start, m_stop));
+			return elaspedTime_ms;
+		}
+
+	private:
+		cudaEvent_t m_start;
+		cudaEvent_t m_stop;
 };
 
 int bmfr_cuda(TmpData & tmpData)
@@ -176,33 +222,33 @@ int bmfr_cuda(TmpData & tmpData)
 
 	const auto LoadFrameInputData = [](FrameInputData & frameInputData, int frame) -> bool
 	{
-		printf("  Loading data of frame %d\n", frame);
+		LOG("  Loading data of frame %d\n", frame);
 
         Operation_result result = load_image(frameInputData.albedos.data(), ALBEDO_FILE_NAME, frame);
         if(!result.success)
         {
-            printf("Albedo buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            LOG("Albedo buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
             return false;
         }
 
         result = load_image(frameInputData.normals.data(), NORMAL_FILE_NAME, frame);
         if(!result.success)
         {
-            printf("Normal buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            LOG("Normal buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
             return false;
         }
 
         result = load_image(frameInputData.positions.data(), POSITION_FILE_NAME, frame);
         if(!result.success)
         {
-            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            LOG("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
             return false;
         }
 
         result = load_image(frameInputData.noisy1spps.data(), NOISY_FILE_NAME, frame);
         if(!result.success)
         {
-            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
+            LOG("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
             return false;
         }
             
@@ -211,7 +257,7 @@ int bmfr_cuda(TmpData & tmpData)
 
 	// Create CUDA buffers
 
-	printf("\nAllocate CUDA buffers\n");
+	LOG("\nAllocate CUDA buffers\n");
 
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
@@ -311,7 +357,7 @@ int bmfr_cuda(TmpData & tmpData)
 		&spp_buffer
 	};
 
-	printf("CUDA buffers total size: %.3fMB\n", float(cudaBufferTotalSize) / 1024.f / 1024.f);
+	LOG("CUDA buffers total size: %.3fMB\n", float(cudaBufferTotalSize) / 1024.f / 1024.f);
 
 	#if COMPRESSED_R
 	// TODO: replace 'buffer_count-2'
@@ -335,7 +381,15 @@ int bmfr_cuda(TmpData & tmpData)
     const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(vec3);
 	#endif
 
-    printf("\nRun kernels.\n");
+    LOG("\nRun kernels.\n");
+
+
+	std::vector<CudaTimer> frame_timers(FRAME_COUNT);
+	std::vector<CudaTimer> accumulate_noisy_data_timers(FRAME_COUNT);
+	std::vector<CudaTimer> fitter_timers(FRAME_COUNT);
+	std::vector<CudaTimer> weighted_sum_timers(FRAME_COUNT);
+	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
+	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
 
 
 	// Only work with 3 channels float32 image
@@ -358,7 +412,7 @@ int bmfr_cuda(TmpData & tmpData)
 		std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + "_cuda.png";
 
 		 // Output image
-		printf("  Save image %s\n", output_filename.c_str());
+		LOG("  Save image %s\n", output_filename.c_str());
 
         OpenImageIO::ImageSpec spec(desc.w, desc.h, 3, OpenImageIO::TypeDesc::FLOAT);
         std::unique_ptr<OpenImageIO::ImageOutput> out(OpenImageIO::ImageOutput::create(output_filename));
@@ -369,7 +423,7 @@ int bmfr_cuda(TmpData & tmpData)
         }
         else
         {
-            printf("  Can't create image file on disk to location %s\n", output_filename.c_str());
+            LOG("  Can't create image file on disk to location %s\n", output_filename.c_str());
         }
 	};
 
@@ -381,16 +435,18 @@ int bmfr_cuda(TmpData & tmpData)
 	
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
-		printf("Frame %d\n", frame);
+		LOG("Frame %d\n", frame);
 
-		printf("  Load frame input data from disk\n");
+		LOG("  Load frame input data from disk\n");
 		LoadFrameInputData(frameInput, frame);
 
-		printf("  Transfert data from host to device\n");
+		LOG("  Transfert data from host to device\n");
 		K_CUDA_CHECK(cudaMemcpy(albedo_buffer.data, frameInput.albedos.data(), frameInput.albedos.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(normals_buffer.current()->data, frameInput.normals.data(), frameInput.normals.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(positions_buffer.current()->data, frameInput.positions.data(), frameInput.positions.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(noisy_1spp_buffer.current()->data, frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+		frame_timers[frame].start();
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -399,13 +455,14 @@ int bmfr_cuda(TmpData & tmpData)
 		//  - concatenate the different features in a single buffer
         // Note: On the first frame accum_noisy_kernel just copies to the features_buffer
         
-		printf("  Run accumulate_noisy_data kernel: grid (%d, %d) | block(%d, %d)\n", 
+		DEBUG_LOG("  Run accumulate_noisy_data kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_with_margin_grid_size.x,
 			k_workset_with_margin_grid_size.y,
 			k_block_size.x,
 			k_block_size.y
 		);
 
+		accumulate_noisy_data_timers[frame].start();
         const int matrix_index = frame == 0 ? 0 : frame - 1;
 		const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
 		const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
@@ -428,8 +485,9 @@ int bmfr_cuda(TmpData & tmpData)
 			pix_off,
 			frame
 		);
+		accumulate_noisy_data_timers[frame].stop();
 
-		K_CUDA_CHECK(cudaDeviceSynchronize());
+		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, *noisy_1spp_buffer.current(), noisy1sppBufferDesc);
@@ -438,27 +496,14 @@ int bmfr_cuda(TmpData & tmpData)
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weights
 
-		if(0)
-		{
-			size_t features_buffer_size = features_buffer.size;
-			std::vector<float> debugData;
-			debugData.resize(features_buffer_size / sizeof(float));
-
-			for(auto i = 0; i < debugData.size(); ++i)
-			{
-				debugData[i] = 0.42f;
-			}
-			K_CUDA_CHECK(cudaMemcpy(features_buffer.data, debugData.data(), features_buffer_size, cudaMemcpyHostToDevice));
-			K_CUDA_CHECK(cudaDeviceSynchronize());
-		}
-
-		printf("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
+		DEBUG_LOG("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_fitter_grid_size.x,
 			k_fitter_grid_size.y,
 			k_fitter_block_size.x,
 			k_fitter_block_size.y
 		);
 
+		fitter_timers[frame].start();
 		run_fitter(
 			k_fitter_grid_size,
 			k_fitter_block_size,
@@ -467,18 +512,20 @@ int bmfr_cuda(TmpData & tmpData)
 			features_buffer.getTypedData<float>(),
 			frame
 		);
+		fitter_timers[frame].stop();
 
-		K_CUDA_CHECK(cudaDeviceSynchronize());
+		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 
-		printf("  Run weighted_sum kernel: grid (%d, %d) | block(%d, %d)\n", 
+		DEBUG_LOG("  Run weighted_sum kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_grid_size.x,
 			k_workset_grid_size.y,
 			k_block_size.x,
 			k_block_size.y
 		);
 
+		weighted_sum_timers[frame].start();
 		run_weighted_sum(
 			k_workset_grid_size,
 			k_block_size,
@@ -490,8 +537,9 @@ int bmfr_cuda(TmpData & tmpData)
 			noisy_1spp_buffer.current()->getTypedData<float>(),
 			frame
 		);
+		weighted_sum_timers[frame].stop();
 
-		K_CUDA_CHECK(cudaDeviceSynchronize());
+		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, noisefree_1spp, noiseFree1sppBufferDesc);
@@ -500,13 +548,14 @@ int bmfr_cuda(TmpData & tmpData)
 		// Phase III: Postprocessing
 		// -> accumulate noise-free color estimate + output a tonemapped version
 
-		printf("  Run accumulate_filtered_data kernel: grid (%d, %d) | block(%d, %d)\n", 
+		DEBUG_LOG("  Run accumulate_filtered_data kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_grid_size.x,
 			k_workset_grid_size.y,
 			k_block_size.x,
 			k_block_size.y
 		);
 
+		accumulate_noisefree_estimate_timers[frame].start();
 		run_accumulate_filtered_data(
 			k_workset_grid_size,
 			k_block_size,
@@ -520,6 +569,7 @@ int bmfr_cuda(TmpData & tmpData)
 			noisefree_1spp_accumulated.current()->getTypedData<float>(),
 			frame
 		);
+		accumulate_noisefree_estimate_timers[frame].stop();
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, *noisefree_1spp_accumulated.current(), noiseFree1sppAccumulatedBufferDesc);
@@ -527,13 +577,14 @@ int bmfr_cuda(TmpData & tmpData)
 
 		// Phase III: Temporal antialiasing
 
-		printf("  Run taa kernel: grid (%d, %d) | block(%d, %d)\n", 
+		DEBUG_LOG("  Run taa kernel: grid (%d, %d) | block(%d, %d)\n", 
 			k_workset_grid_size.x,
 			k_workset_grid_size.y,
 			k_block_size.x,
 			k_block_size.y
 		);
 
+		taa_timers[frame].start();
 		run_taa(
 			k_workset_grid_size,
 			k_block_size,
@@ -543,6 +594,8 @@ int bmfr_cuda(TmpData & tmpData)
 			result_buffer.previous()->getTypedData<float>(),
 			frame
 		);
+		taa_timers[frame].stop();
+		frame_timers[frame].stop();
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
@@ -597,5 +650,22 @@ int bmfr_cuda(TmpData & tmpData)
 		// Swap all double buffers
         std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<DeviceBuffer>::swap, std::placeholders::_1));
 	}
+
+	float totalElapsedTime_ms = 0.f;
+	for(int frame = 0; frame < FRAME_COUNT; ++frame)
+	{
+		float elapsedTime_ms = frame_timers[frame].elaspedTime();
+		LOG("Duration of frame %d: %.3fms\n", frame, elapsedTime_ms);
+		LOG("  accumulate noisy data: %.3fms\n", accumulate_noisy_data_timers[frame].elaspedTime());
+		LOG("  fitter: %.3fms\n", fitter_timers[frame].elaspedTime());
+		LOG("  weighted sum: %.3fms\n", weighted_sum_timers[frame].elaspedTime());
+		LOG("  accumulate noise-free estimage: %.3fms\n", accumulate_noisefree_estimate_timers[frame].elaspedTime());
+		LOG("  taa: %.3fms\n", taa_timers[frame].elaspedTime());
+		totalElapsedTime_ms += elapsedTime_ms;
+	}
+
+	float avgFrameTime_ms = totalElapsedTime_ms / float(FRAME_COUNT);
+	LOG("Average frame timing: %.3fms\n", avgFrameTime_ms);
+
 	return 0;
 }
