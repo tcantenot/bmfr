@@ -784,8 +784,6 @@ int bmfr_c_opencl(TmpData & tmpData)
 		}
 		#endif
 
-		ret = clEnqueueWriteBuffer(command_queue, features_buffer, blocking_write, 0, features_buffer_size, debugData.data(), 0, nullptr, nullptr);
-
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, command_queue, *noisy_1spp_buffer.current(), noisy1sppBufferDesc);
 		#endif
