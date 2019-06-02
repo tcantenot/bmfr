@@ -159,7 +159,7 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
     <CudaCompile />
     <CudaCompile>
       <CodeGeneration>compute_20,compute_20</CodeGeneration>
-      <Optimization>Od</Optimization>
+      <Optimization>O2</Optimization>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
