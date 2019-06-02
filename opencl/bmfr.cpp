@@ -28,10 +28,6 @@
 #include <functional>
 #include <memory>
 
-#define _CRT_SECURE_NO_WARNINGS
-#define STR_HELPER(x) #x
-#define STR(x) STR_HELPER(x)
-
 // ### Choose your OpenCL device and platform with these defines ###
 #define PLATFORM_INDEX 1
 #define DEVICE_INDEX 0
@@ -46,19 +42,6 @@
 // TODO detect IMAGE_SIZES automatically from the input files
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
-// TODO detect FRAME_COUNT from the input files
-//#define FRAME_COUNT 1
-// Location where input frames and feature buffers are located
-#define INPUT_DATA_PATH ../data/classroom/inputs
-#define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
-// camera_matrices.h is expected to be in the same folder
-#include STR(INPUT_DATA_PATH/camera_matrices.h)
-// These names are appended with NN.exr, where NN is the frame number
-#define NOISY_FILE_NAME INPUT_DATA_PATH_STR"/color"
-#define NORMAL_FILE_NAME INPUT_DATA_PATH_STR"/shading_normal"
-#define POSITION_FILE_NAME INPUT_DATA_PATH_STR"/world_position"
-#define ALBEDO_FILE_NAME INPUT_DATA_PATH_STR"/albedo"
-#define OUTPUT_FILE_NAME "outputs/output"
 
 
 // ### Edit these defines if you want to experiment different parameters ###
@@ -218,11 +201,6 @@ static Operation_result load_image(cl_float *image, const std::string file_name,
         return result;
 
     return {true};
-}
-
-static float clamp(float value, float minimum, float maximum)
-{
-    return std::max(std::min(value, maximum), minimum);
 }
 
 int bmfr_opencl()

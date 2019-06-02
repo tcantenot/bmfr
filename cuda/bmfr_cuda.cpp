@@ -5,25 +5,6 @@
 #include <functional>
 #include <memory>
 
-#define _CRT_SECURE_NO_WARNINGS
-#define STR_HELPER(x) #x
-#define STR(x) STR_HELPER(x)
-
-// TODO detect FRAME_COUNT from the input files
-//#define FRAME_COUNT 1
-// Location where input frames and feature buffers are located
-#define INPUT_DATA_PATH ../data/living-room/inputs
-#define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
-// camera_matrices.h is expected to be in the same folder
-#include STR(INPUT_DATA_PATH/camera_matrices.h)
-// These names are appended with NN.exr, where NN is the frame number
-#define NOISY_FILE_NAME INPUT_DATA_PATH_STR"/color"
-#define NORMAL_FILE_NAME INPUT_DATA_PATH_STR"/shading_normal"
-#define POSITION_FILE_NAME INPUT_DATA_PATH_STR"/world_position"
-#define ALBEDO_FILE_NAME INPUT_DATA_PATH_STR"/albedo"
-#define OUTPUT_FOLDER "outputs/"
-#define TO_OUTPUTS_FOLDER(file) OUTPUT_FOLDER ## file
-#define OUTPUT_FILE_NAME TO_OUTPUTS_FOLDER("output")
 
 // NOTE: if you want to use other than normal and world_position data you have to make
 // it available in the first accumulation kernel and in the weighted sum kernel
@@ -112,11 +93,6 @@ static inline Operation_result load_image(float *image, const std::string file_n
         return result;
 
     return {true};
-}
-
-static inline float clamp(float value, float minimum, float maximum)
-{
-    return std::max(std::min(value, maximum), minimum);
 }
 
 #define K_CUDA_CHECK(cudaFunc) \
@@ -487,6 +463,14 @@ int bmfr_cuda(TmpData & tmpData)
 		);
 		accumulate_noisy_data_timers[frame].stop();
 
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			tmpData.features_buffer0.resize(features_buffer_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.features_buffer0.data(), features_buffer.data, features_buffer_size, cudaMemcpyDeviceToHost));
+		}
+		#endif
+
 		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
@@ -618,8 +602,8 @@ int bmfr_cuda(TmpData & tmpData)
 			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
 			K_CUDA_CHECK(cudaMemcpy(tmpData.spp.data(), spp_buffer.current()->data, spp_buffer_size, cudaMemcpyDeviceToHost));
 
-			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
-			K_CUDA_CHECK(cudaMemcpy(tmpData.features_buffer.data(), features_buffer.data, features_buffer_size, cudaMemcpyDeviceToHost));
+			tmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(tmpData.features_buffer1.data(), features_buffer.data, features_buffer_size, cudaMemcpyDeviceToHost));
 
 			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
 			K_CUDA_CHECK(cudaMemcpy(tmpData.features_weights_buffer.data(), features_weights_buffer.data, features_weights_buffer_size, cudaMemcpyDeviceToHost));

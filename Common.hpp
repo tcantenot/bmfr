@@ -3,9 +3,29 @@
 #include <vector>
 
 #define FRAME_COUNT 60
-#define SAVE_INTERMEDIARY_BUFFERS 1
+#define SAVE_INTERMEDIARY_BUFFERS 0
 #define ENABLE_DEBUG_OUTPUT_TMP_DATA 0
-#define DEBUG_OUTPUT_FRAME_NUMBER 1
+#define DEBUG_OUTPUT_FRAME_NUMBER 0
+
+#define _CRT_SECURE_NO_WARNINGS
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
+// TODO detect FRAME_COUNT from the input files
+//#define FRAME_COUNT 1
+// Location where input frames and feature buffers are located
+#define INPUT_DATA_PATH ../data/living-room/inputs
+#define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
+// camera_matrices.h is expected to be in the same folder
+#include STR(INPUT_DATA_PATH/camera_matrices.h)
+// These names are appended with NN.exr, where NN is the frame number
+#define NOISY_FILE_NAME INPUT_DATA_PATH_STR"/color"
+#define NORMAL_FILE_NAME INPUT_DATA_PATH_STR"/shading_normal"
+#define POSITION_FILE_NAME INPUT_DATA_PATH_STR"/world_position"
+#define ALBEDO_FILE_NAME INPUT_DATA_PATH_STR"/albedo"
+#define OUTPUT_FOLDER "outputs/"
+#define TO_OUTPUTS_FOLDER(file) OUTPUT_FOLDER ## file
+#define OUTPUT_FILE_NAME TO_OUTPUTS_FOLDER("output")
 
 constexpr size_t BlockSize = 32;
 
@@ -165,7 +185,8 @@ struct TmpData
 	std::vector<float> prev_frame_pixel_coords_buffer;
 	std::vector<unsigned char> prev_frame_bilinear_samples_validity_mask;
 	std::vector<unsigned char> spp;
-	std::vector<float> features_buffer;
+	std::vector<float> features_buffer0;
+	std::vector<float> features_buffer1;
 	std::vector<float> features_weights_buffer;
 	std::vector<float> features_min_max_buffer;
 	std::vector<float> noisefree_1spp;

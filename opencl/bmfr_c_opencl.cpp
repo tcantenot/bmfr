@@ -28,9 +28,6 @@
 #include <functional>
 #include <memory>
 
-#define _CRT_SECURE_NO_WARNINGS
-#define STR_HELPER(x) #x
-#define STR(x) STR_HELPER(x)
 
 // ### Choose your OpenCL device and platform with these defines ###
 #define PLATFORM_INDEX 1
@@ -46,22 +43,6 @@
 // TODO detect IMAGE_SIZES automatically from the input files
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
-// TODO detect FRAME_COUNT from the input files
-//#define FRAME_COUNT 1
-// Location where input frames and feature buffers are located
-#define INPUT_DATA_PATH ../data/classroom/inputs
-#define INPUT_DATA_PATH_STR STR(INPUT_DATA_PATH)
-// camera_matrices.h is expected to be in the same folder
-#include STR(INPUT_DATA_PATH/camera_matrices.h)
-// These names are appended with NN.exr, where NN is the frame number
-#define NOISY_FILE_NAME INPUT_DATA_PATH_STR"/color"
-#define NORMAL_FILE_NAME INPUT_DATA_PATH_STR"/shading_normal"
-#define POSITION_FILE_NAME INPUT_DATA_PATH_STR"/world_position"
-#define ALBEDO_FILE_NAME INPUT_DATA_PATH_STR"/albedo"
-#define OUTPUT_FOLDER "outputs/"
-#define TO_OUTPUTS_FOLDER(file) OUTPUT_FOLDER ## file
-#define OUTPUT_FILE_NAME TO_OUTPUTS_FOLDER("output")
-
 
 // ### Edit these defines if you want to experiment different parameters ###
 // The amount of noise added to feature buffers to cancel sigularities
@@ -222,10 +203,16 @@ static Operation_result load_image(cl_float *image, const std::string file_name,
     return {true};
 }
 
-static float clamp(float value, float minimum, float maximum)
-{
-    return std::max(std::min(value, maximum), minimum);
-}
+#define K_OPENCL_CHECK(openclFunc) \
+	do { \
+		/*printf(#cudaFunc "\n");\*/ \
+		cl_int ret = openclFunc; \
+		if(ret != CL_SUCCESS) \
+		{ \
+			printf("OpenCL error: %d\n", ret); \
+			__debugbreak(); \
+		} \
+	} while(0)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -248,22 +235,18 @@ static void SaveDevice3Float32ImageToDisk(
 	BufferDesc const & desc
 )
 {
-	assert(buffer.size == desc.w * desc.h * 3 * sizeof(float));
 	const size_t datasize = desc.byte_size;
 	const size_t numelem  = datasize / sizeof(float);
 	std::vector<float> outdata;
 	outdata.resize(numelem);
 
-	cl_int ret = clEnqueueReadBuffer(command_queue, buffer, false, 0, OUTPUT_SIZE * 3 * sizeof(cl_float), outdata.data(), 0, NULL, NULL);
-	assert(ret == CL_SUCCESS);
-	ret = clFlush(command_queue);
-	assert(ret == CL_SUCCESS);
-	ret = clFinish(command_queue);
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, buffer, false, 0, datasize, outdata.data(), 0, NULL, NULL));
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
 
 	std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + "_opencl.png";
 
-		// Output image
+	// Output image
 	printf("  Save image %s\n", output_filename.c_str());
 
     OpenImageIO::ImageSpec spec(desc.w, desc.h, 3, OpenImageIO::TypeDesc::FLOAT);
@@ -377,14 +360,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_device_id device_id = NULL;
 	cl_uint ret_num_devices;
 	cl_uint ret_num_platforms;
-	cl_int ret = clGetPlatformIDs(0, NULL, &ret_num_platforms);
+	K_OPENCL_CHECK(clGetPlatformIDs(0, NULL, &ret_num_platforms));
 	cl_platform_id *platforms = NULL;
 	platforms = (cl_platform_id*)malloc(ret_num_platforms*sizeof(cl_platform_id));
-	ret = clGetPlatformIDs(ret_num_platforms, platforms, NULL);
-	assert(ret == CL_SUCCESS);
-	ret = clGetDeviceIDs(platforms[1], CL_DEVICE_TYPE_ALL, 1, &device_id, &ret_num_devices);
-	assert(ret == CL_SUCCESS);
-	
+	K_OPENCL_CHECK(clGetPlatformIDs(ret_num_platforms, platforms, NULL));
+	K_OPENCL_CHECK(clGetDeviceIDs(platforms[1], CL_DEVICE_TYPE_ALL, 1, &device_id, &ret_num_devices));
+
 	// Print device name
 	char* value;
     size_t valueSize;
@@ -401,11 +382,8 @@ int bmfr_c_opencl(TmpData & tmpData)
     cl_device_id device_id = NULL;   
     cl_uint ret_num_devices;
     cl_uint ret_num_platforms;
-    cl_int ret = clGetPlatformIDs(1, &platform_id, &ret_num_platforms);
-	assert(ret == CL_SUCCESS);
-    
-	ret = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1, &device_id, &ret_num_devices);
-	assert(ret == CL_SUCCESS);
+    K_OPENCL_CHECK(clGetPlatformIDs(1, &platform_id, &ret_num_platforms));
+	K_OPENCL_CHECK(clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_GPU, 1, &device_id, &ret_num_devices));
 
 	// Print device name
     size_t valueSize;
@@ -415,6 +393,8 @@ int bmfr_c_opencl(TmpData & tmpData)
     printf("Selected device: %s\n", value);
     free(value);
 #endif
+
+	cl_int ret = CL_SUCCESS;
 
 	// Create an OpenCL context
 	cl_context context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
@@ -488,23 +468,18 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_program program = clCreateProgramWithSource(context, 1, (const char **)&source_str, (const size_t *)&source_size, &ret);
 
 	// Build the program
-	ret = clBuildProgram(program, 1, &device_id, build_options.str().c_str(), NULL, NULL);
-
-	if(ret != CL_SUCCESS)
+	if(clBuildProgram(program, 1, &device_id, build_options.str().c_str(), NULL, NULL) != CL_SUCCESS)
 	{
 		size_t len = 0;
-		clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &len);
+		K_OPENCL_CHECK(clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &len));
 		char *buffer = (char*)malloc(len * sizeof(char));
-		clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, len, buffer, NULL);
+		K_OPENCL_CHECK(clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, len, buffer, NULL));
 
 		printf("Compilation failed: %s\n", buffer);
 	}
 
-	assert(ret == CL_SUCCESS);
-
 	// Phase I
 	// 3.2 Preprocessing: temporal accumulation of the noisy 1 spp data, which reprojects the previous accumulated data to the new camera frame
-	//cl::Kernel &accum_noisy_kernel(clEnv.addProgram(0, "bmfr.cl", "accumulate_noisy_data", build_options.str().c_str()));
 	cl_kernel accum_noisy_kernel = clCreateKernel(program, "accumulate_noisy_data", &ret);
 	assert(ret == CL_SUCCESS);
 
@@ -557,11 +532,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 	const auto FreeDoubleBuffer = [](Double_buffer<cl_mem> & buffer)
 	{
-		cl_int ret;
-		ret = clReleaseMemObject(*buffer.previous());
-		assert(ret == CL_SUCCESS);
-		ret = clReleaseMemObject(*buffer.current());
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clReleaseMemObject(*buffer.previous()));
+		K_OPENCL_CHECK(clReleaseMemObject(*buffer.current()));
 	};
 
 	const auto LoadFrameInputData = [](FrameInputData & frameInputData, int frame) -> bool
@@ -615,7 +587,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 	// (World) normals buffers (3 * float32) in [-1, +1]^3
 	// TODO: compress data? half? -> would require different storage than feature buffer
 	BufferDesc normalsBufferDesc = GetNormalsBufferDesc(w, h);
-	const size_t normals_buffer_size = albedoBufferDesc.byte_size;
+	const size_t normals_buffer_size = normalsBufferDesc.byte_size;
 	Double_buffer<cl_mem> normals_buffer = CreateDoubleBuffer(context, CL_MEM_READ_WRITE, normals_buffer_size);
 
 	// World positions buffer (3 * float32)
@@ -699,10 +671,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 		// Set kernel arguments
 	int arg_index = 0;
-	ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_pixel_coords_buffer); // [out] Previous frame pixel coordinates (after reprojection)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_bilinear_samples_validity_mask);	// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_pixel_coords_buffer)); // [out] Previous frame pixel coordinates (after reprojection)
+	K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), (void *)&prev_frame_bilinear_samples_validity_mask));	// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
 	arg_index = 0;
 	
@@ -731,42 +701,27 @@ int bmfr_c_opencl(TmpData & tmpData)
 	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
 	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
 
-	ret = clSetKernelArg(fitter_kernel, arg_index++, LOCAL_SIZE * sizeof(float), nullptr);		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(fitter_kernel, arg_index++, BLOCK_PIXELS * sizeof(float), nullptr);	// [local] Shared memory used to store the 'u' vectors
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(fitter_kernel, arg_index++, r_size, nullptr);							// [local] Shared memory used to store the R matrix of the QR factorization
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer);					// [out]   Features weights
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer);					// [out]   Min and max of features values per block (world_positions)
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, LOCAL_SIZE * sizeof(float), nullptr));		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
+	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, BLOCK_PIXELS * sizeof(float), nullptr));		// [local] Shared memory used to store the 'u' vectors
+	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, r_size, nullptr));							// [local] Shared memory used to store the R matrix of the QR factorization
+	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer));	// [out]   Features weights
+	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer));	// [out]   Min and max of features values per block (world_positions)
 
 	arg_index = 0;
-	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer);	// [in]	 Features weights computed by the fitter kernel
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer);	// [in]  Min and max of features values per block (world_positions)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp);	// [out] Noise-free color estimate
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_weights_buffer));	// [in]	 Features weights computed by the fitter kernel
+	K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &features_min_max_buffer));	// [in]  Min and max of features values per block (world_positions)
+	K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp));			// [out] Noise-free color estimate
 
 	arg_index = 0;
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp);					// [in]  Noise free color estimate (computed as the weighted sum of the features)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);				// [in]  Previous frame pixel coordinates (after reprojection)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_bilinear_samples_validity_mask);	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &albedo_buffer);								// [in]  Albedo buffer of the current frame (non-noisy)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped);							// [out] Accumulated and tonemapped noise-free color estimate
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp));							// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer));			// [in]  Previous frame pixel coordinates (after reprojection)
+	K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &prev_frame_bilinear_samples_validity_mask));	// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &albedo_buffer));								// [in]  Albedo buffer of the current frame (non-noisy)
+	K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped));				// [out] Accumulated and tonemapped noise-free color estimate
 
 	arg_index = 0;
-	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer);	// [in] Previous frame pixel coordinates (after reprojection)
-	assert(ret == CL_SUCCESS);
-	ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped);				// [in]	Current frame color buffer
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &prev_frame_pixel_coords_buffer));	// [in] Previous frame pixel coordinates (after reprojection)
+	K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), &noisefree_1spp_acc_tonemapped));	// [in]	Current frame color buffer
 
 	printf("Run kernels.\n");
 
@@ -793,16 +748,10 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 		printf("  Transfert data from host to device\n");
 		const cl_bool blocking_write = true;
-		// https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/clEnqueueWriteBuffer.html
-		// Enqueue commands to write to a buffer object from host memory (= cudaMemcpy(..., cudaMemcpyHostToDevice))
-		ret = clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr);
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr);
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr);
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueWriteBuffer(command_queue, *noisy_1spp_buffer.current(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr);
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *noisy_1spp_buffer.current(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -811,79 +760,50 @@ int bmfr_c_opencl(TmpData & tmpData)
 		//  - concatenate the different features in a single buffer
 		// Note: On the first frame accum_noisy_kernel just copies to the features_buffer
 		arg_index = 2;
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current());			// [in]  Current  (world) normals
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.previous());			// [in]  Previous (world) normals
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current());		// [in]  Current  world positions
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.previous());		// [in]  Previous world positions
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current());	// [out] Current  noisy 1spp color
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.previous());// [in]  Previous noisy 1spp color
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.previous());				// [in]  Previous number of samples accumulated (for CMA)
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current());				// [out] Current  number of samples accumulated (for CMA)
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), &features_buffer);					// [out] Features buffer (half or single-precision)
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current()));			// [in]  Current  (world) normals
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), normals_buffer.previous()));			// [in]  Previous (world) normals
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current()));		// [in]  Current  world positions
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), positions_buffer.previous()));		// [in]  Previous world positions
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current()));		// [out] Current  noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.previous()));		// [in]  Previous noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.previous()));				// [in]  Previous number of samples accumulated (for CMA)
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current()));				// [out] Current  number of samples accumulated (for CMA)
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), &features_buffer));					// [out] Features buffer (half or single-precision)
 		const int matrix_index = frame == 0 ? 0 : frame - 1;
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0])); // [in] ViewProj matrix of previous frame
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0]));
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_int), &frame); // [in] Current frame number
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL);
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0]))); // [in] ViewProj matrix of previous frame
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0])));
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_int), &frame)); // [in] Current frame number
+		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL));
+
+
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			tmpData.features_buffer0.resize(features_buffer_size / sizeof(float));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer0.data(), 0, NULL, NULL));
+		}
+		#endif
+
+		ret = clEnqueueWriteBuffer(command_queue, features_buffer, blocking_write, 0, features_buffer_size, debugData.data(), 0, nullptr, nullptr);
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, command_queue, *noisy_1spp_buffer.current(), noisy1sppBufferDesc);
 		#endif
-
-		if(0)
-		{
-			std::vector<float> debugData;
-			debugData.resize(features_buffer_size / sizeof(float));
-
-			for(auto i = 0; i < debugData.size(); ++i)
-			{
-				debugData[i] = 0.42f;
-			}
-
-			ret = clEnqueueWriteBuffer(command_queue, features_buffer, blocking_write, 0, features_buffer_size, debugData.data(), 0, nullptr, nullptr);
-			assert(ret == CL_SUCCESS);
-
-			ret = clFlush(command_queue);
-			assert(ret == CL_SUCCESS);
-			ret = clFinish(command_queue);
-			assert(ret == CL_SUCCESS);
-		}
  
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
 		// -> compute features weightss
 		arg_index = 5;
-		ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_buffer);			// [in] Features buffer (half or single-precision)
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_int), &frame);  // [in] Current frame number
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL);
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_mem), &features_buffer)); // [in] Features buffer (half or single-precision)
+		K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_int), &frame));  // [in] Current frame number
+		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL));
 
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 		arg_index = 3;
-		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current());			 // [in] Current (world) normals
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current());		 // [in] Current world positions
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current()); // [in] Current noisy 1spp color (only used for debugging)
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame);			 // [in] Current frame number
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueNDRangeKernel(command_queue, weighted_sum_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), normals_buffer.current()));		// [in] Current (world) normals
+		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), positions_buffer.current()));	// [in] Current world positions
+		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), noisy_1spp_buffer.current()));	// [in] Current noisy 1spp color (only used for debugging)
+		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame));						// [in] Current frame number
+		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, weighted_sum_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, command_queue, noisefree_1spp, noiseFree1sppBufferDesc);
@@ -892,16 +812,11 @@ int bmfr_c_opencl(TmpData & tmpData)
 		// Phase III: Postprocessing
 		// -> accumulate noise-free color estimate + output a tonemapped version
 		arg_index = 5;
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current());	// [in]	 Current number of samples accumulated (for CMA)
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.previous()); // [in]  Previous frame noise-free accumulated color estimate 
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.current());	 // [out] Current frame noise-free accumulated color estimate
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueNDRangeKernel(command_queue, accum_filtered_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
-		assert(ret == CL_SUCCESS);
+		K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), spp_buffer.current())); // [in] Current number of samples accumulated (for CMA)
+		K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.previous())); // [in]  Previous frame noise-free accumulated color estimate 
+		K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_mem), noisefree_1spp_accumulated.current()));  // [out] Current frame noise-free accumulated color estimate
+		K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_int), &frame));	// [in] Current frame number
+		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, accum_filtered_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, command_queue, *noisefree_1spp_accumulated.current(), noiseFree1sppAccumulatedBufferDesc);
@@ -909,73 +824,58 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 		// Phase III: Temporal antialiasing
 		arg_index = 2;
-		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.current());	// [out] Antialiased frame color buffer
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.previous());	// [in]  Previous frame color buffer
-		assert(ret == CL_SUCCESS);
-		ret = clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_int), &frame);	// [in]  Current frame number
-		assert(ret == CL_SUCCESS);
-		ret = clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL);
+		K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.current()));	// [out] Antialiased frame color buffer
+		K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), result_buffer.previous()));	// [in]  Previous frame color buffer
+		K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_int), &frame));	// [in]  Current frame number
+		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
+
 		assert(ret == CL_SUCCESS);
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
 		{
 			tmpData.normals.resize(normals_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_buffer_size, tmpData.normals.data(), 0, NULL, NULL);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_buffer_size, tmpData.normals.data(), 0, NULL, NULL));
 
 			tmpData.positions.resize(positions_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_buffer_size, tmpData.positions.data(), 0, NULL, NULL);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_buffer_size, tmpData.positions.data(), 0, NULL, NULL));
 
 			tmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *noisy_1spp_buffer.current(), false, 0, noisy_1spp_buffer_size, tmpData.noisy_1spp.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *noisy_1spp_buffer.current(), false, 0, noisy_1spp_buffer_size, tmpData.noisy_1spp.data(), 0, NULL, NULL));
 
 			tmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, prev_frame_pixel_coords_buffer, false, 0, prev_frame_pixel_coords_buffer_size, tmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, prev_frame_pixel_coords_buffer, false, 0, prev_frame_pixel_coords_buffer_size, tmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL));
 
 			tmpData.prev_frame_bilinear_samples_validity_mask.resize(prev_frame_bilinear_samples_validity_mask_size / sizeof(unsigned char));
-			ret = clEnqueueReadBuffer(command_queue, prev_frame_bilinear_samples_validity_mask, false, 0, prev_frame_bilinear_samples_validity_mask_size, tmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, prev_frame_bilinear_samples_validity_mask, false, 0, prev_frame_bilinear_samples_validity_mask_size, tmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL));
 
 			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
-			ret = clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL));
 
-			tmpData.features_buffer.resize(features_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			tmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer1.data(), 0, NULL, NULL));
 
 			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_weights_buffer, false, 0, features_weights_buffer_size, tmpData.features_weights_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, features_weights_buffer, false, 0, features_weights_buffer_size, tmpData.features_weights_buffer.data(), 0, NULL, NULL));
 
 			tmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, features_min_max_buffer, false, 0, features_min_max_buffer_size, tmpData.features_min_max_buffer.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, features_min_max_buffer, false, 0, features_min_max_buffer_size, tmpData.features_min_max_buffer.data(), 0, NULL, NULL));
 
 			tmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, noisefree_1spp, false, 0, noisefree_1spp_size, tmpData.noisefree_1spp.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisefree_1spp, false, 0, noisefree_1spp_size, tmpData.noisefree_1spp.data(), 0, NULL, NULL));
 
 			tmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *noisefree_1spp_accumulated.current(), false, 0, noisefree_1spp_accumulated_size, tmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *noisefree_1spp_accumulated.current(), false, 0, noisefree_1spp_accumulated_size, tmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL));
 
 			tmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, noisefree_1spp_acc_tonemapped, false, 0, noisefree_1spp_acc_tonemapped_size, tmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisefree_1spp_acc_tonemapped, false, 0, noisefree_1spp_acc_tonemapped_size, tmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL));
 
 			tmpData.result.resize(result_buffer_size / sizeof(float));
-			ret = clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, result_buffer_size, tmpData.result.data(), 0, NULL, NULL);
-			assert(ret == CL_SUCCESS);
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, result_buffer_size, tmpData.result.data(), 0, NULL, NULL));
 
-			ret = clFlush(command_queue);
-			assert(ret == CL_SUCCESS);
-			ret = clFinish(command_queue);
-			assert(ret == CL_SUCCESS);
-			
+			K_OPENCL_CHECK(clFlush(command_queue));
+			K_OPENCL_CHECK(clFinish(command_queue));
+
 			return 0;
 		}
 		#endif
@@ -987,48 +887,30 @@ int bmfr_c_opencl(TmpData & tmpData)
 	}
     
 	// Clean up
-	ret = clFlush(command_queue);
-	assert(ret == CL_SUCCESS);
-	ret = clFinish(command_queue);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseKernel(accum_noisy_kernel);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseKernel(fitter_kernel);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseKernel(weighted_sum_kernel);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseKernel(accum_filtered_kernel);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseKernel(taa_kernel);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseProgram(program);
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
+	K_OPENCL_CHECK(clReleaseKernel(accum_noisy_kernel));
+	K_OPENCL_CHECK(clReleaseKernel(fitter_kernel));
+	K_OPENCL_CHECK(clReleaseKernel(weighted_sum_kernel));
+	K_OPENCL_CHECK(clReleaseKernel(accum_filtered_kernel));
+	K_OPENCL_CHECK(clReleaseKernel(taa_kernel));
+	K_OPENCL_CHECK(clReleaseProgram(program));
 	FreeDoubleBuffer(normals_buffer);
 	FreeDoubleBuffer(positions_buffer);
 	FreeDoubleBuffer(noisy_1spp_buffer);
-	ret = clReleaseMemObject(features_buffer);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(noisefree_1spp);
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clReleaseMemObject(features_buffer));
+	K_OPENCL_CHECK(clReleaseMemObject(noisefree_1spp));
 	FreeDoubleBuffer(noisefree_1spp_accumulated);
 	FreeDoubleBuffer(result_buffer);
-	ret = clReleaseMemObject(prev_frame_pixel_coords_buffer);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(prev_frame_bilinear_samples_validity_mask);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(albedo_buffer);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(noisefree_1spp_acc_tonemapped);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(features_weights_buffer);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseMemObject(features_min_max_buffer);
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clReleaseMemObject(prev_frame_pixel_coords_buffer));
+	K_OPENCL_CHECK(clReleaseMemObject(prev_frame_bilinear_samples_validity_mask));
+	K_OPENCL_CHECK(clReleaseMemObject(albedo_buffer));
+	K_OPENCL_CHECK(clReleaseMemObject(noisefree_1spp_acc_tonemapped));
+	K_OPENCL_CHECK(clReleaseMemObject(features_weights_buffer));
+	K_OPENCL_CHECK(clReleaseMemObject(features_min_max_buffer));
 	FreeDoubleBuffer(spp_buffer);
-	ret = clReleaseCommandQueue(command_queue);
-	assert(ret == CL_SUCCESS);
-	ret = clReleaseContext(context);
-	assert(ret == CL_SUCCESS);
+	K_OPENCL_CHECK(clReleaseCommandQueue(command_queue));
+	K_OPENCL_CHECK(clReleaseContext(context));
 
 	return 0;
 }
