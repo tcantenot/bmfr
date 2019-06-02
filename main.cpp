@@ -81,7 +81,8 @@ int main()
 	CheckDiffFloat("normals", cuda_tmp_data.normals, opencl_tmp_data.normals);
 	CheckDiffFloat("positions", cuda_tmp_data.positions, opencl_tmp_data.positions);
 	CheckDiffFloat("noisy_1spp", cuda_tmp_data.noisy_1spp, opencl_tmp_data.noisy_1spp);
-	CheckDiffFloat("prev_frame_pixel_coords_buffer", cuda_tmp_data.prev_frame_pixel_coords_buffer, opencl_tmp_data.prev_frame_pixel_coords_buffer);
+	CheckDiffFloat("prev_frame_pixel_coords_buffer", cuda_tmp_data.prev_frame_pixel_coords_buffer, opencl_tmp_data.prev_frame_pixel_coords_buffer, false);
+	CheckDiffFloat("features_buffer0", cuda_tmp_data.features_buffer0, opencl_tmp_data.features_buffer0);
 	
 #if 0
 	assert(cuda_tmp_data.prev_frame_bilinear_samples_validity_mask.size() == opencl_tmp_data.prev_frame_bilinear_samples_validity_mask.size());
@@ -104,7 +105,7 @@ int main()
 #endif
 	
 	CheckDiffFloat("min_max", cuda_tmp_data.features_min_max_buffer, opencl_tmp_data.features_min_max_buffer);
-	CheckDiffFloat("features_buffer", cuda_tmp_data.features_buffer, opencl_tmp_data.features_buffer);
+	CheckDiffFloat("features_buffer1", cuda_tmp_data.features_buffer1, opencl_tmp_data.features_buffer1);
 	CheckDiffFloat("features_weights_buffer", cuda_tmp_data.features_weights_buffer, opencl_tmp_data.features_weights_buffer);
 
 	CheckDiffFloat("noisefree_1spp", cuda_tmp_data.noisefree_1spp, opencl_tmp_data.noisefree_1spp);
