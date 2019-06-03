@@ -85,9 +85,13 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
+    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <Intel_OpenCL_Build_Rules>
@@ -205,23 +209,26 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     </Intel_OpenCL_Build_Rules>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\cuda\bmfr_cuda.cpp" />
-    <ClCompile Include="..\main.cpp" />
-    <ClCompile Include="bmfr.cpp" />
-    <ClCompile Include="bmfr_c_opencl.cpp" />
-    <ClCompile Include="CLUtils\CLUtils.cpp" />
+    <CudaCompile Include="..\bmfr\bmfr.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\Common.hpp" />
-    <ClInclude Include="..\cuda\bmfr.cuh" />
-    <ClInclude Include="..\cuda\bmfr_cuda.hpp" />
-    <ClInclude Include="..\matlab\data\frames\camera_matrices.h" />
-    <ClInclude Include="bmfr.hpp" />
-    <ClInclude Include="bmfr_c_opencl.hpp" />
-    <ClInclude Include="CLUtils\CLUtils.hpp" />
+    <ClInclude Include="..\bmfr\bmfr.cuh" />
+    <ClInclude Include="..\bmfr\bmfr.hpp" />
+    <ClInclude Include="..\bmfr\bmfr_cuda.hpp" />
+    <ClInclude Include="..\bmfr\bmfr_cuda_opencl.hpp" />
+    <ClInclude Include="..\bmfr\bmfr_c_opencl.hpp" />
+    <ClInclude Include="..\bmfr\CLUtils\CLUtils.hpp" />
+    <ClInclude Include="config.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="..\cuda\bmfr.cu" />
+    <ClCompile Include="..\bmfr\bmfr.cpp" />
+    <ClCompile Include="..\bmfr\bmfr_cuda.cpp" />
+    <ClCompile Include="..\bmfr\bmfr_c_opencl.cpp" />
+    <ClCompile Include="..\bmfr\CLUtils\CLUtils.cpp" />
+    <ClCompile Include="..\bmfr\main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\bmfr\bmfr.cl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

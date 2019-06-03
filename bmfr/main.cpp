@@ -1,6 +1,6 @@
-#include "opencl/bmfr.hpp"
-#include "opencl/bmfr_c_opencl.hpp"
-#include "cuda/bmfr_cuda.hpp"
+#include "bmfr.hpp"
+#include "bmfr_c_opencl.hpp"
+#include "bmfr_cuda.hpp"
 
 #include <assert.h>
 

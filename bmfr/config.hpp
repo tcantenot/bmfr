@@ -23,7 +23,7 @@
 #define NORMAL_FILE_NAME INPUT_DATA_PATH_STR"/shading_normal"
 #define POSITION_FILE_NAME INPUT_DATA_PATH_STR"/world_position"
 #define ALBEDO_FILE_NAME INPUT_DATA_PATH_STR"/albedo"
-#define OUTPUT_FOLDER "outputs/"
+#define OUTPUT_FOLDER "../outputs/"
 #define TO_OUTPUTS_FOLDER(file) OUTPUT_FOLDER ## file
 #define OUTPUT_FILE_NAME TO_OUTPUTS_FOLDER("output")
 

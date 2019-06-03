@@ -23,6 +23,7 @@
  */
 
 #include "bmfr.hpp"
+
 #include "OpenImageIO/imageio.h"
 #include "CLUtils/CLUtils.hpp"
 #include <functional>

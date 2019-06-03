@@ -1,5 +1,5 @@
 #pragma once
 
-#include "../Common.hpp"
+#include "config.hpp"
 
 int bmfr_opencl();

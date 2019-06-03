@@ -1,0 +1,63 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="OpenCL">
+      <UniqueIdentifier>{87b05e69-767b-4396-b767-83285c208689}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Cuda">
+      <UniqueIdentifier>{43e9d8c0-c852-404d-87ad-cce7da30914b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="CudaAndOpenCL">
+      <UniqueIdentifier>{8b48d45a-8661-4b4f-a1b2-0c586c408440}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="OpenCL\CLUtils">
+      <UniqueIdentifier>{48182b0e-1ae0-4098-9981-899eced2e63e}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="..\bmfr\bmfr.cu">
+      <Filter>Cuda</Filter>
+    </CudaCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\bmfr\bmfr.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="..\bmfr\bmfr_cuda.hpp">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="..\bmfr\bmfr_cuda_opencl.hpp">
+      <Filter>CudaAndOpenCL</Filter>
+    </ClInclude>
+    <ClInclude Include="..\bmfr\bmfr.hpp">
+      <Filter>OpenCL</Filter>
+    </ClInclude>
+    <ClInclude Include="..\bmfr\bmfr_c_opencl.hpp">
+      <Filter>OpenCL</Filter>
+    </ClInclude>
+    <ClInclude Include="..\bmfr\CLUtils\CLUtils.hpp">
+      <Filter>OpenCL\CLUtils</Filter>
+    </ClInclude>
+    <ClInclude Include="config.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\bmfr\bmfr_cuda.cpp">
+      <Filter>Cuda</Filter>
+    </ClCompile>
+    <ClCompile Include="..\bmfr\bmfr.cpp">
+      <Filter>OpenCL</Filter>
+    </ClCompile>
+    <ClCompile Include="..\bmfr\bmfr_c_opencl.cpp">
+      <Filter>OpenCL</Filter>
+    </ClCompile>
+    <ClCompile Include="..\bmfr\CLUtils\CLUtils.cpp">
+      <Filter>OpenCL\CLUtils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\bmfr\main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\bmfr\bmfr.cl">
+      <Filter>OpenCL</Filter>
+    </None>
+  </ItemGroup>
+</Project>
