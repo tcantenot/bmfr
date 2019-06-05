@@ -1,243 +1,24 @@
 #include "bmfr_c_opencl.hpp"
 
-#include "OpenImageIO/imageio.h"
+#include "opencl_helpers.hpp"
+#include "utils.hpp"
 #include "CLUtils/CLUtils.hpp"
 #include <functional>
-#include <memory>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <CL/cl.h>
 
 // ### Choose your OpenCL device and platform with these defines ###
 #define PLATFORM_INDEX 1
 #define DEVICE_INDEX 0
 
-
 // ### Edit these defines if you have different input ###
 
 #define KERNEL_FILENAME "bmfr.cl"
 
-// TODO: turn size and dependent constants into variables (that will be baked as constant inside the kernel)
-
-// TODO detect IMAGE_SIZES automatically from the input files
-#define IMAGE_WIDTH 1280
-#define IMAGE_HEIGHT 720
-
-// ### Edit these defines if you want to experiment different parameters ###
-// The amount of noise added to feature buffers to cancel sigularities
-#define NOISE_AMOUNT 1e-2f
-
-// The amount of new frame used in accumulated frame (1.f would mean no accumulation).
-#define BLEND_ALPHA 0.2f
-#define SECOND_BLEND_ALPHA 0.1f
-#define TAA_BLEND_ALPHA 0.2f
-
-// NOTE: if you want to use other than normal and world_position data you have to make
-// it available in the first accumulation kernel and in the weighted sum kernel
-#define NOT_SCALED_FEATURE_BUFFERS \
-"1.f,"\
-"normal.x,"\
-"normal.y,"\
-"normal.z"
-
-#define USE_SCALED_FEATURES 1
-
-#if USE_SCALED_FEATURES
-// The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
-#define SCALED_FEATURE_BUFFERS \
-",world_position.x,"\
-"world_position.y,"\
-"world_position.z,"\
-"world_position.x*world_position.x,"\
-"world_position.y*world_position.y,"\
-"world_position.z*world_position.z"
-#else
-#define SCALED_FEATURE_BUFFERS ""
-#endif
-
-// ### Edit these defines to change optimizations for your target hardware ###
-// If 1 uses ~half local memory space for R, but computing indexes is more complicated
-#define COMPRESSED_R 1
-
-// If 1 stores tmp_data to private memory when it is loaded for dot product calculation
-#define CACHE_TMP_DATA 1
-
-// If 1 features_data buffer is in half precision for faster load and store.
-// NOTE: if world position values are greater than 256 this cannot be used because
-// 256*256 is infinity in half-precision
-#define USE_HALF_PRECISION_IN_FEATURES_DATA 0
-
-// If 1 adds __attribute__((reqd_work_group_size(256, 1, 1))) to fitter and
-// accumulate_noisy_data kernels. With some codes, attribute made the kernels faster and
-// with some it slowed them down.
-#define ADD_REQD_WG_SIZE 1
-
-// These local sizes are used with 2D kernels which do not require spesific local size
-// (Global sizes are always a multiple of 32)
-#define LOCAL_WIDTH 8
-#define LOCAL_HEIGHT 8
-// Fastest on AMD Radeon Vega Frontier Edition was (LOCAL_WIDTH = 256, LOCAL_HEIGHT = 1)
-// Fastest on Nvidia Titan Xp was (LOCAL_WIDTH = 32, LOCAL_HEIGHT = 1)
-
-
-// ### Do not edit defines after this line unless you know what you are doing ###
-// For example, other than 32x32 blocks are not supported
-#define BLOCK_EDGE_LENGTH 32
-
-#define BLOCK_PIXELS (BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH)
-
-// Rounds image sizes up to next multiple of BLOCK_EDGE_LENGTH
-#define WORKSET_WIDTH  (BLOCK_EDGE_LENGTH * ((IMAGE_WIDTH  + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-#define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-
-// TODO: not sure that the buffers must be OUTPUT_SIZE: IMAGE_WITDH * IMAGE_HEIGHT should be enough
-#define OUTPUT_SIZE (WORKSET_WIDTH * WORKSET_HEIGHT)
-
-// 256 is the maximum local size on AMD GCN
-// Synchronization within 32x32=1024 block requires unrolling four times
-#define LOCAL_SIZE 256
-
-// We need a margin of one block (BLOCK_EDGE_LENGTH) because we are offsetting the blocks
-// at most one block to the left or the right to avoid blocky artifacts.
-// So most of the time, we have 2 partially filled blocks and BLOCK_COUNT_X-1 full blocks on one row
-
-// Example: image of 8x12 with blocks of 4x1
-
-// No offset: 2x3 = 6 blocks
-// |....|....|
-// |....|....|
-// |....|....|
-
-// With some offset (here (-2, 0)): 3x3 = 9 blocks
-// |--..|....|..--|
-// |--..|....|..--|
-// |--..|....|..--|
-
-// Workset with margin width
-#define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
-
-// Workset with margin height
-#define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
-
-// Number of blocks in X dim in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT_X (WORKSET_WITH_MARGINS_WIDTH  / BLOCK_EDGE_LENGTH)
-
-// Number of blocks in Y dim in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT_Y (WORKSET_WITH_MARGINS_HEIGHT / BLOCK_EDGE_LENGTH)
-
-// Number of block in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
-
-// Fitter kernel global range
-#define FITTER_KERNEL_GLOBAL_RANGE (LOCAL_SIZE * WORKSET_WITH_MARGIN_BLOCK_COUNT)
-
-// Creates two same buffers and swap() call can be used to change which one is considered
-// current and which one previous
-template <class T>
-class Double_buffer
-{
-    private:
-        T a, b;
-        bool swapped;
-
-    public:
-		Double_buffer(T aa, T bb): a(aa), b(bb) { }
-        template <typename... Args>
-        Double_buffer(Args... args) : a(args...), b(args...), swapped(false){};
-        T *current() { return swapped ? &a : &b; }
-        T *previous() { return swapped ? &b : &a; }
-        void swap() { swapped = !swapped; }
-};
-
-struct Operation_result
-{
-    bool success;
-    std::string error_message;
-    Operation_result(bool success, const std::string &error_message = "") :
-        success(success), error_message(error_message) {}
-};
-
-static Operation_result read_image_file(const std::string &file_name, const int frame, float *buffer)
-{
-    OpenImageIO::ImageInput *in = OpenImageIO::ImageInput::open(file_name + std::to_string(frame) + ".exr");
-    if(!in || in->spec().width != IMAGE_WIDTH || in->spec().height != IMAGE_HEIGHT || in->spec().nchannels != 3)
-    {
-        return {false, "Can't open image file or it has wrong type: " + file_name};
-    }
-
-    // NOTE: this converts .exr files that might be in halfs to single precision floats
-    // In the dataset distributed with the BMFR paper all exr files are in single precision
-    in->read_image(OpenImageIO::TypeDesc::FLOAT, buffer);
-    in->close();
-
-    return {true};
-}
-
-static Operation_result load_image(cl_float *image, const std::string file_name, const int frame)
-{
-    Operation_result result = read_image_file(file_name, frame, image);
-    if(!result.success)
-        return result;
-
-    return {true};
-}
-
-#define K_OPENCL_CHECK(openclFunc) \
-	do { \
-		/*printf(#cudaFunc "\n");\*/ \
-		cl_int ret = openclFunc; \
-		if(ret != CL_SUCCESS) \
-		{ \
-			printf("OpenCL error: %d\n", ret); \
-			__debugbreak(); \
-		} \
-	} while(0)
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
- 
-#ifdef __APPLE__
-#include <OpenCL/opencl.h>
-#else
-#include <CL/cl.h>
-#endif
- 
 #define MAX_SOURCE_SIZE (0x100000)
-
-// Only work with 3 channels float32 image
-static void SaveDevice3Float32ImageToDisk(
-	std::string const & filename,
-	int frame,
-	cl_command_queue const & command_queue,
-	cl_mem const & buffer,
-	BufferDesc const & desc
-)
-{
-	const size_t datasize = desc.byte_size;
-	const size_t numelem  = datasize / sizeof(float);
-	std::vector<float> outdata;
-	outdata.resize(numelem);
-
-	K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, buffer, false, 0, datasize, outdata.data(), 0, NULL, NULL));
-	K_OPENCL_CHECK(clFlush(command_queue));
-	K_OPENCL_CHECK(clFinish(command_queue));
-
-	std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + "_opencl.png";
-
-	// Output image
-	printf("  Save image %s\n", output_filename.c_str());
-
-    OpenImageIO::ImageSpec spec(desc.w, desc.h, 3, OpenImageIO::TypeDesc::FLOAT);
-    std::unique_ptr<OpenImageIO::ImageOutput> out(OpenImageIO::ImageOutput::create(output_filename));
-    if(out && out->open(output_filename, spec))
-    {
-        out->write_image(OpenImageIO::TypeDesc::FLOAT, outdata.data(), desc.x_stride, desc.y_stride, 0);
-        out->close();
-    }
-    else
-    {
-        printf("  Can't create image file on disk to location %s\n", output_filename.c_str());
-    }
-}
 
 int bmfr_c_opencl(TmpData & tmpData)
 {
@@ -380,8 +161,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_command_queue command_queue = clCreateCommandQueue(context, device_id, 0, &ret);
  
 
-	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS);
-	std::string features_scaled(SCALED_FEATURE_BUFFERS);
+	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
+	std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
 	// + 1 because last one does not have ',' after it.
 #if USE_SCALED_FEATURES
 	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
@@ -403,7 +184,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		" -D IMAGE_HEIGHT=" << IMAGE_HEIGHT <<
 		" -D WORKSET_WIDTH=" << WORKSET_WIDTH <<
 		" -D WORKSET_HEIGHT=" << WORKSET_HEIGHT <<
-		" -D FEATURE_BUFFERS=" << NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS <<
+		" -D FEATURE_BUFFERS=" << NOT_SCALED_FEATURE_BUFFERS_STR SCALED_FEATURE_BUFFERS_STR <<
 		" -D LOCAL_WIDTH=" << LOCAL_WIDTH <<
 		" -D LOCAL_HEIGHT=" << LOCAL_HEIGHT <<
 		" -D WORKSET_WITH_MARGINS_WIDTH=" << WORKSET_WITH_MARGINS_WIDTH <<
@@ -475,25 +256,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_kernel taa_kernel = clCreateKernel(program, "taa", &ret);
 	assert(ret == CL_SUCCESS);
 
-	// Load input data arrays from disk to host memory
-
-	struct FrameInputData
-	{
-		std::vector<float> albedos;
-		std::vector<float> normals;
-		std::vector<float> positions;
-		std::vector<float> noisy1spps;
-	} frameInput;
-
 	std::vector<float> result;
     result.resize(3 * OUTPUT_SIZE);
-
-	// Allocate frame input data buffers
-    frameInput.albedos.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-    frameInput.normals.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-    frameInput.positions.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-    frameInput.noisy1spps.resize(3 * IMAGE_WIDTH * IMAGE_HEIGHT);
-
 
 	// Create OpenCL buffers
 
@@ -509,44 +273,10 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 	const auto FreeDoubleBuffer = [](Double_buffer<cl_mem> & buffer)
 	{
-		K_OPENCL_CHECK(clReleaseMemObject(*buffer.previous()));
-		K_OPENCL_CHECK(clReleaseMemObject(*buffer.current()));
+		K_OPENCL_CHECK(clReleaseMemObject(buffer.previous()));
+		K_OPENCL_CHECK(clReleaseMemObject(buffer.current()));
 	};
 
-	const auto LoadFrameInputData = [](FrameInputData & frameInputData, int frame) -> bool
-	{
-		printf("  Loading data of frame %d\n", frame);
-
-        Operation_result result = load_image(frameInputData.albedos.data(), ALBEDO_FILE_NAME, frame);
-        if(!result.success)
-        {
-            printf("Albedo buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
-            return false;
-        }
-
-        result = load_image(frameInputData.normals.data(), NORMAL_FILE_NAME, frame);
-        if(!result.success)
-        {
-            printf("Normal buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
-            return false;
-        }
-
-        result = load_image(frameInputData.positions.data(), POSITION_FILE_NAME, frame);
-        if(!result.success)
-        {
-            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
-            return false;
-        }
-
-        result = load_image(frameInputData.noisy1spps.data(), NOISY_FILE_NAME, frame);
-        if(!result.success)
-        {
-            printf("Position buffer loading failed, reason: %s (frame %d)\n", result.error_message.c_str(), frame);
-            return false;
-        }
-            
-		return true;
-	};
 
 	// Create OpenCL buffers
 
@@ -714,21 +444,20 @@ int bmfr_c_opencl(TmpData & tmpData)
 	size_t k_fitter_global_size[] = { FITTER_KERNEL_GLOBAL_RANGE };
 	size_t k_fitter_local_size[] = { LOCAL_SIZE };
 
-	// Note: in real use case there would not be WriteBuffer and ReadBuffer function calls
-	// because the input data comes from the path tracer and output goes to the screen
+	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
 	{
 		printf("Frame %d\n", frame);
 
 		printf("  Load frame input data from disk\n");
-		LoadFrameInputData(frameInput, frame);
+		LoadFrameInputData(frameInput, w, h, frame);
 
 		printf("  Transfert data from host to device\n");
 		const cl_bool blocking_write = true;
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, albedo_buffer, blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr));
-		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *normals_buffer.current(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
-		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *positions_buffer.current(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
-		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *noisy_1spp_buffer.current(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, normals_buffer.current(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, positions_buffer.current(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, noisy_1spp_buffer.current(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -810,13 +539,13 @@ int bmfr_c_opencl(TmpData & tmpData)
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
 		{
 			tmpData.normals.resize(normals_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *normals_buffer.current(), false, 0, normals_buffer_size, tmpData.normals.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, normals_buffer.current(), false, 0, normals_buffer_size, tmpData.normals.data(), 0, NULL, NULL));
 
 			tmpData.positions.resize(positions_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *positions_buffer.current(), false, 0, positions_buffer_size, tmpData.positions.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, positions_buffer.current(), false, 0, positions_buffer_size, tmpData.positions.data(), 0, NULL, NULL));
 
 			tmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *noisy_1spp_buffer.current(), false, 0, noisy_1spp_buffer_size, tmpData.noisy_1spp.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisy_1spp_buffer.current(), false, 0, noisy_1spp_buffer_size, tmpData.noisy_1spp.data(), 0, NULL, NULL));
 
 			tmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
 			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, prev_frame_pixel_coords_buffer, false, 0, prev_frame_pixel_coords_buffer_size, tmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL));
@@ -825,7 +554,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, prev_frame_bilinear_samples_validity_mask, false, 0, prev_frame_bilinear_samples_validity_mask_size, tmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL));
 
 			tmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, spp_buffer.current(), false, 0, spp_buffer_size, tmpData.spp.data(), 0, NULL, NULL));
 
 			tmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
 			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, features_buffer, false, 0, features_buffer_size, tmpData.features_buffer1.data(), 0, NULL, NULL));
@@ -840,13 +569,13 @@ int bmfr_c_opencl(TmpData & tmpData)
 			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisefree_1spp, false, 0, noisefree_1spp_size, tmpData.noisefree_1spp.data(), 0, NULL, NULL));
 
 			tmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *noisefree_1spp_accumulated.current(), false, 0, noisefree_1spp_accumulated_size, tmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisefree_1spp_accumulated.current(), false, 0, noisefree_1spp_accumulated_size, tmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL));
 
 			tmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
 			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, noisefree_1spp_acc_tonemapped, false, 0, noisefree_1spp_acc_tonemapped_size, tmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL));
 
 			tmpData.result.resize(result_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *result_buffer.current(), false, 0, result_buffer_size, tmpData.result.data(), 0, NULL, NULL));
+			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, result_buffer.current(), false, 0, result_buffer_size, tmpData.result.data(), 0, NULL, NULL));
 
 			K_OPENCL_CHECK(clFlush(command_queue));
 			K_OPENCL_CHECK(clFinish(command_queue));
@@ -855,7 +584,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		}
 		#endif
 
-		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *result_buffer.current(), resultBufferDesc);
+		SaveDevice3Float32ImageToDisk("result", frame, command_queue, result_buffer.current(), resultBufferDesc);
 
 		// Swap all double buffers
 		std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<cl_mem>::swap, std::placeholders::_1));

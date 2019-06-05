@@ -219,6 +219,9 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="..\bmfr\bmfr_c_opencl.hpp" />
     <ClInclude Include="..\bmfr\CLUtils\CLUtils.hpp" />
     <ClInclude Include="config.hpp" />
+    <ClInclude Include="cuda_helpers.hpp" />
+    <ClInclude Include="opencl_helpers.hpp" />
+    <ClInclude Include="utils.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bmfr\bmfr.cpp" />
@@ -226,6 +229,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClCompile Include="..\bmfr\bmfr_c_opencl.cpp" />
     <ClCompile Include="..\bmfr\CLUtils\CLUtils.cpp" />
     <ClCompile Include="..\bmfr\main.cpp" />
+    <ClCompile Include="bmfr_cuda_opencl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\bmfr\bmfr.cl" />
