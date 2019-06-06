@@ -18,6 +18,59 @@
 	} while(0)
 
 
+class OpenCLDeviceBuffer
+{
+	public:
+		OpenCLDeviceBuffer(): m_data(nullptr), m_size(0)
+		{
+	
+		}
+
+		OpenCLDeviceBuffer(cl_context c, cl_mem_flags f, size_t s)
+		{
+			init(c, f, s);
+		}
+
+		~OpenCLDeviceBuffer()
+		{
+			destroy();
+		}
+
+		void init(cl_context c, cl_mem_flags f, size_t s)
+		{
+			if(m_data)
+			{
+				destroy();
+			}
+
+			cl_int ret;
+			cl_mem data = clCreateBuffer(c, f, s, nullptr, &ret);
+			if(ret == CL_SUCCESS)
+			{
+				m_data = data;
+				m_size = s;
+			}
+		}
+
+		void destroy()
+		{
+			if(m_data)
+			{
+				K_OPENCL_CHECK(clReleaseMemObject(m_data));
+				m_data = nullptr;
+				m_size = 0;
+			}
+		}
+
+		cl_mem * data() { return &m_data; }
+		cl_mem const * data() const { return &m_data; }
+		size_t size() const { return m_size; }
+
+	private:
+		cl_mem m_data;
+		size_t m_size;
+};
+
 
 // Only work with 3 channels float32 image
 static void SaveDevice3Float32ImageToDisk(

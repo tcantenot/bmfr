@@ -42,12 +42,13 @@ class CudaDeviceBuffer
 
 		void init(size_t s)
 		{
-			if(m_data && s != m_size)
+			if(m_data)
 			{
 				destroy();
-				K_CUDA_CHECK(cudaMalloc(&m_data, s));
-				m_size = s;
 			}
+
+			K_CUDA_CHECK(cudaMalloc(&m_data, s));
+			m_size = s;
 		}
 
 		void destroy()
