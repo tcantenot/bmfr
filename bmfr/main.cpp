@@ -1,6 +1,7 @@
 #include "bmfr.hpp"
 #include "bmfr_c_opencl.hpp"
 #include "bmfr_cuda.hpp"
+#include "bmfr_cuda_opencl.hpp"
 
 #include <assert.h>
 
@@ -13,7 +14,8 @@ int main()
 {
 	TmpData cuda_tmp_data, opencl_tmp_data;
 	//bmfr_c_opencl(opencl_tmp_data);
-	bmfr_cuda(cuda_tmp_data);
+	//bmfr_cuda(cuda_tmp_data);
+	bmfr_cuda_c_opencl(cuda_tmp_data, opencl_tmp_data);
 
 #if !ENABLE_DEBUG_OUTPUT_TMP_DATA
 	return 0;

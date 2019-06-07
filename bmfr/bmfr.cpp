@@ -33,8 +33,6 @@
 #define PLATFORM_INDEX 1
 #define DEVICE_INDEX 0
 
-#define KERNEL_FILENAME "bmfr.cl"
-
 
 int bmfr_opencl()
 {

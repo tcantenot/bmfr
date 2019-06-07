@@ -1,6 +1,4 @@
 #include "bmfr_c_opencl.hpp"
-
-#include "opencl_helpers.hpp"
 #include "utils.hpp"
 
 #include <stdio.h>
@@ -9,10 +7,6 @@
 #include <functional>
 #include <CL/cl.h>
 
-#define PLATFORM_INDEX 1
-#define DEVICE_INDEX 0
-#define KERNEL_FILENAME "bmfr.cl"
-#define MAX_SOURCE_SIZE (0x100000)
 
 void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_device_id & device)
 {
@@ -39,7 +33,7 @@ void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_devi
 
 		for (i = 0; i < platformCount; i++)
 		{
-			printf("\n %d. Platform \n", i+1);
+			LOG("\n %d. Platform \n", i+1);
 
 			for (j = 0; j < attributeCount; j++) {
 
@@ -50,11 +44,11 @@ void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_devi
 				// get platform attribute value
 				clGetPlatformInfo(platforms[i], attributeTypes[j], infoSize, info, NULL);
 
-				printf("  %d.%d %-11s: %s\n", i+1, j+1, attributeNames[j], info);
+				LOG("  %d.%d %-11s: %s\n", i+1, j+1, attributeNames[j], info);
 				free(info);
 			}
 
-			printf("\n");
+			LOG("\n");
 
 			// get all devices
 			clGetDeviceIDs(platforms[i], CL_DEVICE_TYPE_ALL, 0, NULL, &deviceCount);
@@ -68,34 +62,34 @@ void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_devi
 				clGetDeviceInfo(devices[j], CL_DEVICE_NAME, 0, NULL, &valueSize);
 				value = (char*) malloc(valueSize);
 				clGetDeviceInfo(devices[j], CL_DEVICE_NAME, valueSize, value, NULL);
-				printf("%d. Device: %s\n", j+1, value);
+				LOG("%d. Device: %s\n", j+1, value);
 				free(value);
 
 				// print hardware device version
 				clGetDeviceInfo(devices[j], CL_DEVICE_VERSION, 0, NULL, &valueSize);
 				value = (char*) malloc(valueSize);
 				clGetDeviceInfo(devices[j], CL_DEVICE_VERSION, valueSize, value, NULL);
-				printf(" %d.%d Hardware version: %s\n", j+1, 1, value);
+				LOG(" %d.%d Hardware version: %s\n", j+1, 1, value);
 				free(value);
 
 				// print software driver version
 				clGetDeviceInfo(devices[j], CL_DRIVER_VERSION, 0, NULL, &valueSize);
 				value = (char*) malloc(valueSize);
 				clGetDeviceInfo(devices[j], CL_DRIVER_VERSION, valueSize, value, NULL);
-				printf(" %d.%d Software version: %s\n", j+1, 2, value);
+				LOG(" %d.%d Software version: %s\n", j+1, 2, value);
 				free(value);
 
 				// print c version supported by compiler for device
 				clGetDeviceInfo(devices[j], CL_DEVICE_OPENCL_C_VERSION, 0, NULL, &valueSize);
 				value = (char*) malloc(valueSize);
 				clGetDeviceInfo(devices[j], CL_DEVICE_OPENCL_C_VERSION, valueSize, value, NULL);
-				printf(" %d.%d OpenCL C version: %s\n", j+1, 3, value);
+				LOG(" %d.%d OpenCL C version: %s\n", j+1, 3, value);
 				free(value);
 
 				// print parallel compute units
 				clGetDeviceInfo(devices[j], CL_DEVICE_MAX_COMPUTE_UNITS,
 						sizeof(maxComputeUnits), &maxComputeUnits, NULL);
-				printf(" %d.%d Parallel compute units: %d\n", j+1, 4, maxComputeUnits);
+				LOG(" %d.%d Parallel compute units: %d\n", j+1, 4, maxComputeUnits);
 
 			}
 
@@ -122,7 +116,7 @@ void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_devi
     clGetDeviceInfo(device_id, CL_DEVICE_NAME, 0, NULL, &valueSize);
     value = (char*) malloc(valueSize);
     clGetDeviceInfo(device_id, CL_DEVICE_NAME, valueSize, value, NULL);
-    printf("\nSelected device: %s\n", value);
+    LOG("\nSelected device: %s\n", value);
     free(value);
 	free(platforms);
 	platforms = nullptr;
@@ -140,7 +134,7 @@ void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_devi
     clGetDeviceInfo(device_id, CL_DEVICE_NAME, 0, NULL, &valueSize);
     char * value = (char*) malloc(valueSize);
     clGetDeviceInfo(device_id, CL_DEVICE_NAME, valueSize, value, NULL);
-    printf("Selected device: %s\n", value);
+    LOG("Selected device: %s\n", value);
     free(value);
 #endif
 
@@ -256,7 +250,7 @@ void init_bmfr_opencl_buffers(BMFROpenCLBuffers & buffers, size_t w, size_t h, s
 
 int bmfr_c_opencl(TmpData & tmpData)
 {
-    printf("Initialize.\n");
+    LOG("Initialize.\n");
 
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
 	std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
@@ -343,17 +337,17 @@ int bmfr_c_opencl(TmpData & tmpData)
 	char *source_str;
 	size_t source_size;
  
-	fp = fopen(KERNEL_FILENAME, "r");
+	fp = fopen(OPENCL_KERNEL_FILENAME, "r");
 	if(!fp)
 	{
 		fprintf(stderr, "Failed to load kernel.\n");
 		exit(1);
 	}
     
-	char * file_content = (char*)malloc(MAX_SOURCE_SIZE);
+	char * file_content = (char*)malloc(OPENCL_MAX_SOURCE_SIZE);
 
-	source_str  = (char*)malloc(MAX_SOURCE_SIZE);
-	source_size = fread(source_str, 1, MAX_SOURCE_SIZE, fp);
+	source_str  = (char*)malloc(OPENCL_MAX_SOURCE_SIZE);
+	source_size = fread(source_str, 1, OPENCL_MAX_SOURCE_SIZE, fp);
 	fclose(fp);
 
 	cl_int ret = CL_SUCCESS;
@@ -373,7 +367,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		char *buffer = (char*)malloc(len * sizeof(char));
 		K_OPENCL_CHECK(clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, len, buffer, NULL));
 
-		printf("Compilation failed: %s\n", buffer);
+		LOG("Compilation failed: %s\n", buffer);
 	}
 
 	// Phase I
@@ -399,12 +393,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 	// Create OpenCL buffers
 
-	printf("\nAllocate OpenCL buffers\n");
+	LOG("\nAllocate OpenCL buffers\n");
 	
 	BMFROpenCLBuffers buffers;
 	init_bmfr_opencl_buffers(buffers, w, h, buffer_count, context);
 
-	std::vector<Double_buffer<OpenCLDeviceBuffer> *> all_double_buffers =
+	std::vector<Double_buffer<OpenCLDeviceBuffer> *> opencl_double_buffers =
 	{
 		&buffers.normals_buffer,
 		&buffers.positions_buffer,
@@ -445,7 +439,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 	K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), buffers.prev_frame_pixel_coords_buffer.data()));	// [in] Previous frame pixel coordinates (after reprojection)
 	K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_mem), buffers.noisefree_1spp_acc_tonemapped.data()));	// [in]	Current frame color buffer
 
-	printf("Run kernels.\n");
+	LOG("Run kernels.\n");
 
 	// Note: enqueueNDRangeKernel takes in the global_size and the local_size.
 	// In CUDA, a dispatch takes in the grid_size and the block_size.
@@ -463,12 +457,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
 	{
-		printf("Frame %d\n", frame);
+		LOG("Frame %d\n", frame);
 
-		printf("  Load frame input data from disk\n");
+		LOG("  Load frame input data from disk\n");
 		LoadFrameInputData(frameInput, w, h, frame);
 
-		printf("  Transfert data from host to device\n");
+		LOG("  Transfert data from host to device\n");
 		const cl_bool blocking_write = true;
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.albedo_buffer.data(), blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.normals_buffer.current().data(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
@@ -616,7 +610,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *buffers.result_buffer.current().data(), GetResultBufferDesc(w, h));
 
 		// Swap all double buffers
-		std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<OpenCLDeviceBuffer>::swap, std::placeholders::_1));
+		std::for_each(opencl_double_buffers.begin(), opencl_double_buffers.end(), std::bind(&Double_buffer<OpenCLDeviceBuffer>::swap, std::placeholders::_1));
 	}
     
 	// Clean up

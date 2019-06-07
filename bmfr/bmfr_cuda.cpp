@@ -107,33 +107,22 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
 
 int bmfr_cuda(TmpData & tmpData)
 {
+    LOG("Initialize.\n");
+
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
-    std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
-    const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',');
-    // + 1 because last one does not have ',' after it.
-    const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',') + 1;
-    // + 3 stands for three noisy spp color channels.
-    const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
+	std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
 
-	// Create CUDA buffers
-
-	LOG("\nAllocate CUDA buffers\n");
-
-	const size_t w = IMAGE_WIDTH;
-	const size_t h = IMAGE_HEIGHT;
-
-	BMFRCudaBuffers buffers;
-	init_bmfr_cuda_buffers(buffers, w, h, buffer_count);
-
-	std::vector<Double_buffer<CudaDeviceBuffer> *> all_double_buffers =
-	{
-		&buffers.normals_buffer,
-		&buffers.positions_buffer,
-		&buffers.noisy_1spp_buffer,
-		&buffers.noisefree_1spp_accumulated,
-		&buffers.result_buffer,
-		&buffers.spp_buffer
-	};
+	// + 1 because last one does not have ',' after it.
+	#if USE_SCALED_FEATURES
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',');
+	#else
+	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
+	const auto features_scaled_count = 0;
+	#endif
+	
+	// + 3 stands for three noisy spp color channels.
+	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
 	#if COMPRESSED_R
 	// TODO: replace 'buffer_count-2'
@@ -157,16 +146,9 @@ int bmfr_cuda(TmpData & tmpData)
     const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(vec3);
 	#endif
 
-    LOG("\nRun kernels.\n");
-
-
-	std::vector<CudaTimer> frame_timers(FRAME_COUNT);
-	std::vector<CudaTimer> accumulate_noisy_data_timers(FRAME_COUNT);
-	std::vector<CudaTimer> fitter_timers(FRAME_COUNT);
-	std::vector<CudaTimer> weighted_sum_timers(FRAME_COUNT);
-	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
-	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
-
+	const size_t w = IMAGE_WIDTH;
+	const size_t h = IMAGE_HEIGHT;
+	
 	const size_t localWidth					= GetLocalWidth();
 	const size_t localHeight				= GetLocalHeight();
 	const size_t worksetWidth				= ComputeWorksetWidth(w);
@@ -176,12 +158,39 @@ int bmfr_cuda(TmpData & tmpData)
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize();
 
+
+	// Create CUDA buffers
+
+	LOG("\nAllocate CUDA buffers\n");
+
+	BMFRCudaBuffers buffers;
+	init_bmfr_cuda_buffers(buffers, w, h, buffer_count);
+
+	std::vector<Double_buffer<CudaDeviceBuffer> *> cuda_double_buffers =
+	{
+		&buffers.normals_buffer,
+		&buffers.positions_buffer,
+		&buffers.noisy_1spp_buffer,
+		&buffers.noisefree_1spp_accumulated,
+		&buffers.result_buffer,
+		&buffers.spp_buffer
+	};
+
+	std::vector<CudaTimer> frame_timers(FRAME_COUNT);
+	std::vector<CudaTimer> accumulate_noisy_data_timers(FRAME_COUNT);
+	std::vector<CudaTimer> fitter_timers(FRAME_COUNT);
+	std::vector<CudaTimer> weighted_sum_timers(FRAME_COUNT);
+	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
+	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
+
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
 	const dim3 k_workset_with_margin_grid_size((worksetWidthWithMargin + k_block_size.x - 1) / k_block_size.x, (worksetHeightWithMargin + k_block_size.y - 1) / k_block_size.y);
     const dim3 k_fitter_block_size(fitterLocalSize);
     const dim3 k_fitter_grid_size((fitterGlobalSize + k_fitter_block_size.x - 1) / k_fitter_block_size.x);
 	
+    LOG("\nRun kernels.\n");
+
 	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
@@ -419,7 +428,7 @@ int bmfr_cuda(TmpData & tmpData)
 		SaveDevice3Float32ImageToDisk("result", frame, buffers.result_buffer.current(), GetResultBufferDesc(w, h));
 
 		// Swap all double buffers
-        std::for_each(all_double_buffers.begin(), all_double_buffers.end(), std::bind(&Double_buffer<CudaDeviceBuffer>::swap, std::placeholders::_1));
+        std::for_each(cuda_double_buffers.begin(), cuda_double_buffers.end(), std::bind(&Double_buffer<CudaDeviceBuffer>::swap, std::placeholders::_1));
 	}
 
 	float totalElapsedTime_ms = 0.f;

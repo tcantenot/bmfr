@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#define FRAME_COUNT 60
+#define FRAME_COUNT 2
 #define SAVE_INTERMEDIARY_BUFFERS 1
 #define ENABLE_DEBUG_OUTPUT_TMP_DATA 0
 #define DEBUG_OUTPUT_FRAME_NUMBER 0
@@ -10,6 +10,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
+
+#define OPENCL_KERNEL_FILENAME "bmfr.cl"
+#define OPENCL_MAX_SOURCE_SIZE (0x100000)
 
 // TODO detect FRAME_COUNT from the input files
 //#define FRAME_COUNT 1
