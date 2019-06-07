@@ -2,127 +2,20 @@
 
 #include "opencl_helpers.hpp"
 #include "utils.hpp"
-#include "CLUtils/CLUtils.hpp"
-#include <functional>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <functional>
 #include <CL/cl.h>
 
-// ### Choose your OpenCL device and platform with these defines ###
 #define PLATFORM_INDEX 1
 #define DEVICE_INDEX 0
-
-// ### Edit these defines if you have different input ###
-
 #define KERNEL_FILENAME "bmfr.cl"
-
 #define MAX_SOURCE_SIZE (0x100000)
 
-void init_bmfr_opencl_buffers(BMFROpenCLBuffers & buffers, size_t w, size_t h, size_t features_count, cl_context c)
+void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_device_id & device)
 {
-	size_t cudaBufferTotalSize = 0;
-
-	// Albedo buffer (3 * float32) // TODO: compress this
-	const BufferDesc albedoBufferDesc = GetAlbedoBufferDesc(w, h);
-	const size_t albedo_buffer_size = albedoBufferDesc.byte_size;
-    buffers.albedo_buffer.init(c, CL_MEM_READ_ONLY, albedo_buffer_size);
-	cudaBufferTotalSize += albedo_buffer_size;
-
-	// (World) normals buffers (3 * float32) in [-1, +1]^3
-	const BufferDesc normalsBufferDesc = GetNormalsBufferDesc(w, h);
-	const size_t normals_buffer_size = normalsBufferDesc.byte_size;
-	buffers.normals_buffer[0].init(c, CL_MEM_READ_WRITE, normals_buffer_size);
-	buffers.normals_buffer[1].init(c, CL_MEM_READ_WRITE, normals_buffer_size);
-	cudaBufferTotalSize += 2 * normals_buffer_size;
-
-	// World positions buffer (3 * float32)
-	// TODO: normalize in [0, 1] (or [-1, +1])
-	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
-	const size_t positions_buffer_size = positionsBufferDesc.byte_size;
-    buffers.positions_buffer[0].init(c, CL_MEM_READ_WRITE, positions_buffer_size);
-    buffers.positions_buffer[1].init(c, CL_MEM_READ_WRITE, positions_buffer_size);
-	cudaBufferTotalSize += 2 * positions_buffer_size;
-    
-	// Noisy 1spp color buffer (3 * float32)
-	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
-	const size_t noisy_1spp_buffer_size = noisy1sppBufferDesc.byte_size;
-	buffers.noisy_1spp_buffer[0].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
-	buffers.noisy_1spp_buffer[1].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
-	cudaBufferTotalSize += 2 * noisy_1spp_buffer_size;
-
-	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-    const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
-	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * features_count * features_buffer_datatype_size;
-    buffers.features_buffer.init(c, CL_MEM_READ_WRITE, features_buffer_size);
-	cudaBufferTotalSize += features_buffer_size;
-
-	// Noise-free color estimate (3 * float32)
-	const BufferDesc noiseFree1sppBufferDesc = GetNoiseFree1sppBufferDesc(w, h);
-	const size_t noisefree_1spp_size = noiseFree1sppBufferDesc.byte_size;
-    buffers.noisefree_1spp.init(c, CL_MEM_READ_WRITE, noisefree_1spp_size);
-	cudaBufferTotalSize += noisefree_1spp_size;
-
-	// Noise-free accumulated color estimate (3 * float32)
-	const BufferDesc noiseFree1sppAccumulatedBufferDesc = GetNoiseFree1sppAccumulatedBufferDesc(w, h);
-	const size_t noisefree_1spp_accumulated_size = noiseFree1sppAccumulatedBufferDesc.byte_size;
-    buffers.noisefree_1spp_accumulated[0].init(c, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
-    buffers.noisefree_1spp_accumulated[1].init(c, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
-	cudaBufferTotalSize += 2 * noisefree_1spp_accumulated_size;
-
-	// Final antialiased color buffer (3 * float32)
-	const BufferDesc resultBufferDesc = GetResultBufferDesc(w, h);
-	const size_t result_buffer_size = resultBufferDesc.byte_size;
-    buffers.result_buffer[0].init(c, CL_MEM_READ_WRITE, result_buffer_size);
-    buffers.result_buffer[1].init(c, CL_MEM_READ_WRITE, result_buffer_size);
-	cudaBufferTotalSize += 2 * result_buffer_size;
-
-	// Previous frame pixel coordinates (after reprojection) (2 * float32)
-	const BufferDesc prevFramePixelCoordsBufferDesc = GetPrevFramePixelCoordsBufferDesc(w, h);
-	const size_t prev_frame_pixel_coords_buffer_size = prevFramePixelCoordsBufferDesc.byte_size;
-    buffers.prev_frame_pixel_coords_buffer.init(c, CL_MEM_READ_WRITE, prev_frame_pixel_coords_buffer_size);
-	cudaBufferTotalSize += prev_frame_pixel_coords_buffer_size;
-
-	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
-	const BufferDesc prevFrameBilinearSamplesValidityMaskBufferDesc = GetPrevFrameBilinearSamplesValidityMaskBufferDesc(w, h);
-	const size_t prev_frame_bilinear_samples_validity_mask_size = prevFrameBilinearSamplesValidityMaskBufferDesc.byte_size;
-    buffers.prev_frame_bilinear_samples_validity_mask.init(c, CL_MEM_READ_WRITE, prev_frame_bilinear_samples_validity_mask_size);
-	cudaBufferTotalSize += prev_frame_bilinear_samples_validity_mask_size;
-
-	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
-	const BufferDesc noiseFree1sppAccTonemappedBufferDesc = GetNoiseFree1sppAccTonemappedBufferDesc(w, h);
-	const size_t noisefree_1spp_acc_tonemapped_size = noiseFree1sppAccTonemappedBufferDesc.byte_size;
-    buffers.noisefree_1spp_acc_tonemapped.init(c, CL_MEM_READ_WRITE, noisefree_1spp_acc_tonemapped_size);
-	cudaBufferTotalSize += noisefree_1spp_acc_tonemapped_size;
-
-	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
-	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (features_count - 3) * 3 * sizeof(float);
-    buffers.features_weights_buffer.init(c, CL_MEM_READ_WRITE, features_weights_buffer_size);
-	cudaBufferTotalSize += features_weights_buffer_size;
-
-	// Min and max of features values per block (world_positions) (6 * 2 * float32)
-	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * 2 * sizeof(float);
-    buffers.features_min_max_buffer.init(c, CL_MEM_READ_WRITE, features_min_max_buffer_size);
-	cudaBufferTotalSize += features_min_max_buffer_size;
-
-	// Number of samples accumulated (for cumulative moving average) (char 8bits)
-	const BufferDesc sppBufferDesc = GetSppBufferDesc(w, h);
-	const size_t spp_buffer_size = sppBufferDesc.byte_size;
-    buffers.spp_buffer[0].init(c, CL_MEM_READ_WRITE, spp_buffer_size);
-    buffers.spp_buffer[1].init(c, CL_MEM_READ_WRITE, spp_buffer_size);
-	cudaBufferTotalSize += 2 * spp_buffer_size;
-
-	// TODO: change this size to w * h
-    buffers.result_host.resize(3 * OUTPUT_SIZE);
-
-	LOG("CUDA buffers total size: %.3fMB\n", float(cudaBufferTotalSize) / 1024.f / 1024.f);
-}
-
-int bmfr_c_opencl(TmpData & tmpData)
-{
-    printf("Initialize.\n");
-
 	// Based on: https://gist.github.com/courtneyfaulkner/7919509
 	{
 		cl_uint i, j;
@@ -254,24 +147,166 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_int ret = CL_SUCCESS;
 
 	// Create an OpenCL context
-	cl_context context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
+	context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
  
 	// Create a command queue
-	cl_command_queue command_queue = clCreateCommandQueue(context, device_id, 0, &ret);
- 
+	command_queue = clCreateCommandQueue(context, device_id, 0, &ret);
+
+	device = device_id;
+}
+
+void init_bmfr_opencl_buffers(BMFROpenCLBuffers & buffers, size_t w, size_t h, size_t features_count, cl_context c)
+{
+	size_t openCLBuffersTotalSize = 0;
+
+	// Albedo buffer (3 * float32) // TODO: compress this
+	const BufferDesc albedoBufferDesc = GetAlbedoBufferDesc(w, h);
+	const size_t albedo_buffer_size = albedoBufferDesc.byte_size;
+    buffers.albedo_buffer.init(c, CL_MEM_READ_ONLY, albedo_buffer_size);
+	openCLBuffersTotalSize += albedo_buffer_size;
+
+	// (World) normals buffers (3 * float32) in [-1, +1]^3
+	const BufferDesc normalsBufferDesc = GetNormalsBufferDesc(w, h);
+	const size_t normals_buffer_size = normalsBufferDesc.byte_size;
+	buffers.normals_buffer[0].init(c, CL_MEM_READ_WRITE, normals_buffer_size);
+	buffers.normals_buffer[1].init(c, CL_MEM_READ_WRITE, normals_buffer_size);
+	openCLBuffersTotalSize += 2 * normals_buffer_size;
+
+	// World positions buffer (3 * float32)
+	// TODO: normalize in [0, 1] (or [-1, +1])
+	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
+	const size_t positions_buffer_size = positionsBufferDesc.byte_size;
+    buffers.positions_buffer[0].init(c, CL_MEM_READ_WRITE, positions_buffer_size);
+    buffers.positions_buffer[1].init(c, CL_MEM_READ_WRITE, positions_buffer_size);
+	openCLBuffersTotalSize += 2 * positions_buffer_size;
+    
+	// Noisy 1spp color buffer (3 * float32)
+	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
+	const size_t noisy_1spp_buffer_size = noisy1sppBufferDesc.byte_size;
+	buffers.noisy_1spp_buffer[0].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
+	buffers.noisy_1spp_buffer[1].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
+	openCLBuffersTotalSize += 2 * noisy_1spp_buffer_size;
+
+	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
+    const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
+	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * features_count * features_buffer_datatype_size;
+    buffers.features_buffer.init(c, CL_MEM_READ_WRITE, features_buffer_size);
+	openCLBuffersTotalSize += features_buffer_size;
+
+	// Noise-free color estimate (3 * float32)
+	const BufferDesc noiseFree1sppBufferDesc = GetNoiseFree1sppBufferDesc(w, h);
+	const size_t noisefree_1spp_size = noiseFree1sppBufferDesc.byte_size;
+    buffers.noisefree_1spp.init(c, CL_MEM_READ_WRITE, noisefree_1spp_size);
+	openCLBuffersTotalSize += noisefree_1spp_size;
+
+	// Noise-free accumulated color estimate (3 * float32)
+	const BufferDesc noiseFree1sppAccumulatedBufferDesc = GetNoiseFree1sppAccumulatedBufferDesc(w, h);
+	const size_t noisefree_1spp_accumulated_size = noiseFree1sppAccumulatedBufferDesc.byte_size;
+    buffers.noisefree_1spp_accumulated[0].init(c, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
+    buffers.noisefree_1spp_accumulated[1].init(c, CL_MEM_READ_WRITE, noisefree_1spp_accumulated_size);
+	openCLBuffersTotalSize += 2 * noisefree_1spp_accumulated_size;
+
+	// Final antialiased color buffer (3 * float32)
+	const BufferDesc resultBufferDesc = GetResultBufferDesc(w, h);
+	const size_t result_buffer_size = resultBufferDesc.byte_size;
+    buffers.result_buffer[0].init(c, CL_MEM_READ_WRITE, result_buffer_size);
+    buffers.result_buffer[1].init(c, CL_MEM_READ_WRITE, result_buffer_size);
+	openCLBuffersTotalSize += 2 * result_buffer_size;
+
+	// Previous frame pixel coordinates (after reprojection) (2 * float32)
+	const BufferDesc prevFramePixelCoordsBufferDesc = GetPrevFramePixelCoordsBufferDesc(w, h);
+	const size_t prev_frame_pixel_coords_buffer_size = prevFramePixelCoordsBufferDesc.byte_size;
+    buffers.prev_frame_pixel_coords_buffer.init(c, CL_MEM_READ_WRITE, prev_frame_pixel_coords_buffer_size);
+	openCLBuffersTotalSize += prev_frame_pixel_coords_buffer_size;
+
+	// Validity mask of reprojected bilinear samples into previous frame (uchar 8bits)
+	const BufferDesc prevFrameBilinearSamplesValidityMaskBufferDesc = GetPrevFrameBilinearSamplesValidityMaskBufferDesc(w, h);
+	const size_t prev_frame_bilinear_samples_validity_mask_size = prevFrameBilinearSamplesValidityMaskBufferDesc.byte_size;
+    buffers.prev_frame_bilinear_samples_validity_mask.init(c, CL_MEM_READ_WRITE, prev_frame_bilinear_samples_validity_mask_size);
+	openCLBuffersTotalSize += prev_frame_bilinear_samples_validity_mask_size;
+
+	// Tonemapped noise-free color estimate w/ albedo (3 * float32)
+	const BufferDesc noiseFree1sppAccTonemappedBufferDesc = GetNoiseFree1sppAccTonemappedBufferDesc(w, h);
+	const size_t noisefree_1spp_acc_tonemapped_size = noiseFree1sppAccTonemappedBufferDesc.byte_size;
+    buffers.noisefree_1spp_acc_tonemapped.init(c, CL_MEM_READ_WRITE, noisefree_1spp_acc_tonemapped_size);
+	openCLBuffersTotalSize += noisefree_1spp_acc_tonemapped_size;
+
+	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
+	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (features_count - 3) * 3 * sizeof(float);
+    buffers.features_weights_buffer.init(c, CL_MEM_READ_WRITE, features_weights_buffer_size);
+	openCLBuffersTotalSize += features_weights_buffer_size;
+
+	// Min and max of features values per block (world_positions) (6 * 2 * float32)
+	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * 2 * sizeof(float);
+    buffers.features_min_max_buffer.init(c, CL_MEM_READ_WRITE, features_min_max_buffer_size);
+	openCLBuffersTotalSize += features_min_max_buffer_size;
+
+	// Number of samples accumulated (for cumulative moving average) (char 8bits)
+	const BufferDesc sppBufferDesc = GetSppBufferDesc(w, h);
+	const size_t spp_buffer_size = sppBufferDesc.byte_size;
+    buffers.spp_buffer[0].init(c, CL_MEM_READ_WRITE, spp_buffer_size);
+    buffers.spp_buffer[1].init(c, CL_MEM_READ_WRITE, spp_buffer_size);
+	openCLBuffersTotalSize += 2 * spp_buffer_size;
+
+	// TODO: change this size to w * h
+    buffers.result_host.resize(3 * OUTPUT_SIZE);
+
+	LOG("OpenCL buffers total size: %.3fMB\n", float(openCLBuffersTotalSize) / 1024.f / 1024.f);
+}
+
+int bmfr_c_opencl(TmpData & tmpData)
+{
+    printf("Initialize.\n");
 
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
 	std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
+
 	// + 1 because last one does not have ',' after it.
-#if USE_SCALED_FEATURES
+	#if USE_SCALED_FEATURES
 	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
 	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',');
-#else
+	#else
 	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
 	const auto features_scaled_count = 0;
-#endif
+	#endif
+	
 	// + 3 stands for three noisy spp color channels.
 	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
+
+	#if COMPRESSED_R
+	// TODO: replace 'buffer_count-2'
+	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy 1spp color channels inputs.
+	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input with makes a size of 'buffer_count-2'.
+	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
+	// See section 3.3 and 3.4.
+
+	// Computed via sum of arithmetic sequence (that for the upper right triangle):
+	//    0  1  2  3  4  5 x
+	// 0 00 01 02 03 04 05
+	// 1  - 11 12 13 14 15
+	// 2  -  - 22 23 24 25
+	// 3  -  -  - 33 34 35
+	// 4  -  -  -  - 44 45
+	// 5  -  -  -  -  - 55
+	// y
+	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
+	const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
+	#else
+	const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(cl_float3);
+	#endif
+
+	const size_t w = IMAGE_WIDTH;
+	const size_t h = IMAGE_HEIGHT;
+
+	const size_t localWidth					= GetLocalWidth();
+	const size_t localHeight				= GetLocalHeight();
+	const size_t worksetWidth				= ComputeWorksetWidth(w);
+	const size_t worksetHeight				= ComputeWorksetHeight(h);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWidthWithMargin(w);
+	const size_t worksetHeightWithMargin	= ComputeWorksetHeightWithMargin(h);
+	const size_t fitterLocalSize			= GetFitterLocalSize();
+	const size_t fitterGlobalSize			= GetFitterGlobalSize();
+
 
 	// Create and build the kernel
 	std::stringstream build_options;
@@ -279,15 +314,15 @@ int bmfr_c_opencl(TmpData & tmpData)
 		" -D BUFFER_COUNT=" << buffer_count <<
 		" -D FEATURES_NOT_SCALED=" << features_not_scaled_count <<
 		" -D FEATURES_SCALED=" << features_scaled_count <<
-		" -D IMAGE_WIDTH=" << IMAGE_WIDTH <<
-		" -D IMAGE_HEIGHT=" << IMAGE_HEIGHT <<
-		" -D WORKSET_WIDTH=" << WORKSET_WIDTH <<
-		" -D WORKSET_HEIGHT=" << WORKSET_HEIGHT <<
+		" -D IMAGE_WIDTH=" << w <<
+		" -D IMAGE_HEIGHT=" << h <<
+		" -D WORKSET_WIDTH=" << worksetWidth <<
+		" -D WORKSET_HEIGHT=" << worksetHeight <<
 		" -D FEATURE_BUFFERS=" << NOT_SCALED_FEATURE_BUFFERS_STR SCALED_FEATURE_BUFFERS_STR <<
-		" -D LOCAL_WIDTH=" << LOCAL_WIDTH <<
-		" -D LOCAL_HEIGHT=" << LOCAL_HEIGHT <<
-		" -D WORKSET_WITH_MARGINS_WIDTH=" << WORKSET_WITH_MARGINS_WIDTH <<
-		" -D WORKSET_WITH_MARGINS_HEIGHT=" << WORKSET_WITH_MARGINS_HEIGHT <<
+		" -D LOCAL_WIDTH=" << localWidth <<
+		" -D LOCAL_HEIGHT=" << localHeight <<
+		" -D WORKSET_WITH_MARGINS_WIDTH=" << worksetWidthWithMargin <<
+		" -D WORKSET_WITH_MARGINS_HEIGHT=" << worksetHeightWithMargin <<
 		" -D BLOCK_EDGE_LENGTH=" << STR(BLOCK_EDGE_LENGTH) <<
 		" -D BLOCK_PIXELS=" << BLOCK_PIXELS <<
 		" -D R_EDGE=" << buffer_count - 2 <<
@@ -300,7 +335,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		" -D COMPRESSED_R=" << STR(COMPRESSED_R) <<
 		" -D CACHE_TMP_DATA=" << STR(CACHE_TMP_DATA) <<
 		" -D ADD_REQD_WG_SIZE=" << STR(ADD_REQD_WG_SIZE) <<
-		" -D LOCAL_SIZE=" << STR(LOCAL_SIZE) <<
+		" -D LOCAL_SIZE=" << fitterLocalSize <<
 		" -D USE_HALF_PRECISION_IN_FEATURES_DATA=" << STR(USE_HALF_PRECISION_IN_FEATURES_DATA);
 
 	// Load the kernel source code into the array source_str
@@ -320,6 +355,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 	source_str  = (char*)malloc(MAX_SOURCE_SIZE);
 	source_size = fread(source_str, 1, MAX_SOURCE_SIZE, fp);
 	fclose(fp);
+
+	cl_int ret = CL_SUCCESS;
+	cl_context context;
+	cl_command_queue command_queue;
+	cl_device_id device_id;
+	init_opencl(context, command_queue, device_id);
 
 	// Create a program from the kernel source
 	cl_program program = clCreateProgramWithSource(context, 1, (const char **)&source_str, (const size_t *)&source_size, &ret);
@@ -355,34 +396,10 @@ int bmfr_c_opencl(TmpData & tmpData)
 	cl_kernel taa_kernel = clCreateKernel(program, "taa", &ret);
 	assert(ret == CL_SUCCESS);
 
-	std::vector<float> result;
-    result.resize(3 * OUTPUT_SIZE);
-
-	// Create OpenCL buffers
-
-	const auto CreateDoubleBuffer = [](cl_context c, cl_mem_flags f, size_t s) -> Double_buffer<cl_mem>
-	{
-		cl_int ret;
-		cl_mem b0 = clCreateBuffer(c, f, s, nullptr, &ret);
-		assert(ret == CL_SUCCESS);
-		cl_mem b1 = clCreateBuffer(c, f, s, nullptr, &ret);
-		assert(ret == CL_SUCCESS);
-		return Double_buffer<cl_mem>(b0, b1);
-	};
-
-	const auto FreeDoubleBuffer = [](Double_buffer<cl_mem> & buffer)
-	{
-		K_OPENCL_CHECK(clReleaseMemObject(buffer.previous()));
-		K_OPENCL_CHECK(clReleaseMemObject(buffer.current()));
-	};
-
 
 	// Create OpenCL buffers
 
 	printf("\nAllocate OpenCL buffers\n");
-
-	const size_t w = IMAGE_WIDTH;
-	const size_t h = IMAGE_HEIGHT;
 	
 	BMFROpenCLBuffers buffers;
 	init_bmfr_opencl_buffers(buffers, w, h, buffer_count, context);
@@ -403,33 +420,9 @@ int bmfr_c_opencl(TmpData & tmpData)
 	K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.prev_frame_pixel_coords_buffer.data())); // [out] Previous frame pixel coordinates (after reprojection)
 	K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.prev_frame_bilinear_samples_validity_mask.data()));	// [out] Validity mask of bilinear samples in previous frame (after reprojection) (i.e valid reprojection = no disoclusion or outside frame)
 
-	arg_index = 0;
-	
-	#if COMPRESSED_R
-	// TODO: replace 'buffer_count-2'
-	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy 1spp color channels inputs.
-	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input with makes a size of 'buffer_count-2'.
-	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
-	// See section 3.3 and 3.4.
-
-	// Computed via sum of arithmetic sequence (that for the upper right triangle):
-	//    0  1  2  3  4  5 x
-	// 0 00 01 02 03 04 05
-	// 1  - 11 12 13 14 15
-	// 2  -  - 22 23 24 25
-	// 3  -  -  - 33 34 35
-	// 4  -  -  -  - 44 45
-	// 5  -  -  -  -  - 55
-	// y
-	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
-	const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
-	#else
-	const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(cl_float3);
-	#endif
-
 	// https://www.khronos.org/registry/OpenCL/sdk/1.1/docs/man/xhtml/clSetKernelArg.html
 	// Note: For arguments declared with the __local qualifier, the size specified will be the size in bytes of the buffer that must be allocated for the __local argument.
-
+	arg_index = 0;
 	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, LOCAL_SIZE * sizeof(float), nullptr));		// [local] Size of the shared memory used to perform parrallel reduction (max, min, sum)
 	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, BLOCK_PIXELS * sizeof(float), nullptr));		// [local] Shared memory used to store the 'u' vectors
 	K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, r_size, nullptr));							// [local] Shared memory used to store the R matrix of the QR factorization
@@ -460,11 +453,12 @@ int bmfr_c_opencl(TmpData & tmpData)
 	//	global_size = grid_size * block_size
 	//	local_size = block_size
 
-	size_t k_workset_with_margin_global_size[] = { WORKSET_WITH_MARGINS_WIDTH, WORKSET_WITH_MARGINS_HEIGHT };
-	size_t k_workset_global_size[] = { WORKSET_WIDTH, WORKSET_HEIGHT };
-	size_t k_local_size[] = { LOCAL_WIDTH, LOCAL_HEIGHT };
-	size_t k_fitter_global_size[] = { FITTER_KERNEL_GLOBAL_RANGE };
-	size_t k_fitter_local_size[] = { LOCAL_SIZE };
+
+	const size_t k_workset_with_margin_global_size[] = { worksetWidthWithMargin, worksetHeightWithMargin };
+	const size_t k_workset_global_size[] = { worksetWidth, worksetHeight };
+	const size_t k_local_size[] = { localWidth, localHeight };
+	const size_t k_fitter_global_size[] = { fitterGlobalSize };
+	const size_t k_fitter_local_size[] = { fitterLocalSize };
 
 	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
@@ -634,20 +628,6 @@ int bmfr_c_opencl(TmpData & tmpData)
 	K_OPENCL_CHECK(clReleaseKernel(accum_filtered_kernel));
 	K_OPENCL_CHECK(clReleaseKernel(taa_kernel));
 	K_OPENCL_CHECK(clReleaseProgram(program));
-	//FreeDoubleBuffer(normals_buffer);
-	//FreeDoubleBuffer(positions_buffer);
-	//FreeDoubleBuffer(noisy_1spp_buffer);
-	//K_OPENCL_CHECK(clReleaseMemObject(features_buffer));
-	//K_OPENCL_CHECK(clReleaseMemObject(noisefree_1spp));
-	//FreeDoubleBuffer(noisefree_1spp_accumulated);
-	//FreeDoubleBuffer(result_buffer);
-	//K_OPENCL_CHECK(clReleaseMemObject(prev_frame_pixel_coords_buffer));
-	//K_OPENCL_CHECK(clReleaseMemObject(prev_frame_bilinear_samples_validity_mask));
-	//K_OPENCL_CHECK(clReleaseMemObject(albedo_buffer));
-	//K_OPENCL_CHECK(clReleaseMemObject(noisefree_1spp_acc_tonemapped));
-	//K_OPENCL_CHECK(clReleaseMemObject(features_weights_buffer));
-	//K_OPENCL_CHECK(clReleaseMemObject(features_min_max_buffer));
-	//FreeDoubleBuffer(spp_buffer);
 	K_OPENCL_CHECK(clReleaseCommandQueue(command_queue));
 	K_OPENCL_CHECK(clReleaseContext(context));
 

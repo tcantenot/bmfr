@@ -3,7 +3,7 @@
 #include <vector>
 
 #define FRAME_COUNT 60
-#define SAVE_INTERMEDIARY_BUFFERS 0
+#define SAVE_INTERMEDIARY_BUFFERS 1
 #define ENABLE_DEBUG_OUTPUT_TMP_DATA 0
 #define DEBUG_OUTPUT_FRAME_NUMBER 0
 
@@ -158,6 +158,16 @@
 
 constexpr size_t BlockSize = BLOCK_EDGE_LENGTH;
 
+inline constexpr size_t GetLocalWidth()
+{
+	return LOCAL_WIDTH;
+}
+
+inline constexpr size_t GetLocalHeight()
+{
+	return LOCAL_HEIGHT;
+}
+
 inline constexpr size_t ComputeWorksetWidth(size_t w)
 {
 	return BlockSize * ((w + BlockSize - 1) / BlockSize);
@@ -176,6 +186,16 @@ inline constexpr size_t ComputeWorksetWidthWithMargin(size_t w)
 inline constexpr size_t ComputeWorksetHeightWithMargin(size_t h)
 {
 	return ComputeWorksetHeight(h) + BlockSize;
+}
+
+inline constexpr size_t GetFitterLocalSize()
+{
+	return LOCAL_SIZE;
+}
+
+inline constexpr size_t GetFitterGlobalSize()
+{
+	return FITTER_KERNEL_GLOBAL_RANGE;
 }
 
 struct BufferDesc

@@ -167,12 +167,20 @@ int bmfr_cuda(TmpData & tmpData)
 	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
 	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
 
+	const size_t localWidth					= GetLocalWidth();
+	const size_t localHeight				= GetLocalHeight();
+	const size_t worksetWidth				= ComputeWorksetWidth(w);
+	const size_t worksetHeight				= ComputeWorksetHeight(h);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWidthWithMargin(w);
+	const size_t worksetHeightWithMargin	= ComputeWorksetHeightWithMargin(h);
+	const size_t fitterLocalSize			= GetFitterLocalSize();
+	const size_t fitterGlobalSize			= GetFitterGlobalSize();
 
-    dim3 k_block_size(LOCAL_WIDTH, LOCAL_HEIGHT);
-    dim3 k_workset_grid_size((WORKSET_WIDTH + k_block_size.x - 1) / k_block_size.x, (WORKSET_HEIGHT + k_block_size.y - 1) / k_block_size.y);
-	dim3 k_workset_with_margin_grid_size((WORKSET_WITH_MARGINS_WIDTH + k_block_size.x - 1) / k_block_size.x, (WORKSET_WITH_MARGINS_HEIGHT + k_block_size.y - 1) / k_block_size.y);
-    dim3 k_fitter_block_size(LOCAL_SIZE);
-    dim3 k_fitter_grid_size((FITTER_KERNEL_GLOBAL_RANGE + k_fitter_block_size.x - 1) / k_fitter_block_size.x);
+    const dim3 k_block_size(localWidth, localHeight);
+    const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
+	const dim3 k_workset_with_margin_grid_size((worksetWidthWithMargin + k_block_size.x - 1) / k_block_size.x, (worksetHeightWithMargin + k_block_size.y - 1) / k_block_size.y);
+    const dim3 k_fitter_block_size(fitterLocalSize);
+    const dim3 k_fitter_grid_size((fitterGlobalSize + k_fitter_block_size.x - 1) / k_fitter_block_size.x);
 	
 	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)

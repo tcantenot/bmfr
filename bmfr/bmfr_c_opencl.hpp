@@ -23,6 +23,7 @@ struct BMFROpenCLBuffers
 	std::vector<float> result_host;
 };
 
+void init_opencl(cl_context & context, cl_command_queue & command_queue, cl_device_id & device);
 void init_bmfr_opencl_buffers(BMFROpenCLBuffers & buffers, size_t w, size_t h, size_t features_count, cl_context c);
 
 
