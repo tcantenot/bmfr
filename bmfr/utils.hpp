@@ -113,3 +113,57 @@ inline bool LoadFrameInputData(FrameInputData & frameInputData, size_t w, size_t
             
 	return true;
 }
+
+inline void CheckDiffFloat(char const * name, std::vector<float> const & lhs, std::vector<float> const & rhs, bool bVerbose = false)
+{
+	float maxDiff = 0, maxRelDiff = 0;
+	int maxDiffIdx = 0, maxRelDiffIdx = 0;
+	assert(lhs.size() == rhs.size());
+	for(int i = 0; i < lhs.size(); ++i)
+	{
+		if(lhs[i] != rhs[i])
+		{
+			float lhs_fval = lhs[i] == 0.f ? abs(lhs[i]) : lhs[i];
+			unsigned int lhs_uval;
+			memcpy(&lhs_uval, &lhs_fval, sizeof(lhs_uval));
+
+			float rhs_fval = rhs[i] == 0.f ? abs(rhs[i]) : rhs[i];
+			unsigned int rhs_uval;
+			memcpy(&rhs_uval, &rhs_fval, sizeof(rhs_uval));
+
+			if(bVerbose)
+			{
+				unsigned int d = (rhs_uval > lhs_uval) ? (rhs_uval - lhs_uval) : (lhs_uval - rhs_uval);
+				if(d > 1)
+					printf("%s[%d]: %x != %x\n", name, i, lhs_uval, rhs_uval);
+			}
+
+			float diff = abs(lhs[i] - rhs[i]);
+			float relDiff = abs(diff) / abs(rhs[i]);
+
+			if(diff > maxDiff)
+			{
+				maxDiff = diff;
+				maxDiffIdx = i;
+			}
+
+			if(relDiff > maxRelDiff)
+			{
+				maxRelDiff = relDiff;
+				maxRelDiffIdx = i;
+			}
+		}
+	}
+
+	if(maxDiff > 0)
+	{
+		printf("%s[%d]: max diff = %.9g, %.9g != %.9g\n", name, maxDiffIdx, maxDiff, lhs[maxDiffIdx], rhs[maxDiffIdx]);
+		printf("%s[%d]: max rel diff = %.9g, %.9g != %.9g\n", name, maxRelDiffIdx, maxRelDiff, lhs[maxRelDiffIdx], rhs[maxRelDiffIdx]);
+	}
+	else
+	{
+		printf("%s: identical!\n", name);
+	}
+
+	printf("\n");
+}

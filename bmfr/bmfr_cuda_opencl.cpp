@@ -9,6 +9,21 @@
 #include <functional>
 #include <CL/cl.h>
 
+#include "bmfr.cuh"
+
+void CopyOpenCLBufferToCudaBuffer(OpenCLDeviceBuffer const & src, CudaDeviceBuffer & dst, cl_command_queue & command_queue)
+{
+	const size_t datasize = dst.size();
+	std::vector<char> hostBuffer;
+	hostBuffer.resize(datasize);
+
+	K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *src.data(), false, 0, datasize, hostBuffer.data(), 0, NULL, NULL));
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
+	K_CUDA_CHECK(cudaMemcpy(dst.data(), hostBuffer.data(), datasize, cudaMemcpyHostToDevice));
+	K_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 {
 	// Common init /////////////////////////////////////////////////////////////
@@ -262,6 +277,10 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.normals_buffer.current().data(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.positions_buffer.current().data(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.noisy_1spp_buffer.current().data(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
+		K_CUDA_CHECK(cudaMemcpy(cu_buffers.albedo_buffer.data(), frameInput.albedos.data(), frameInput.albedos.size() * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(cu_buffers.normals_buffer.current().data(), frameInput.normals.data(), frameInput.normals.size() * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(cu_buffers.positions_buffer.current().data(), frameInput.positions.data(), frameInput.positions.size() * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(cu_buffers.noisy_1spp_buffer.current().data(), frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -285,6 +304,33 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_int), &frame)); // [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, accum_noisy_kernel, 2, NULL, k_workset_with_margin_global_size, k_local_size, 0, NULL, NULL));
 
+		const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
+		const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
+
+		run_accumulate_noisy_data(
+			k_workset_with_margin_grid_size,
+			k_block_size,
+			cu_buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+			cu_buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
+			cu_buffers.normals_buffer.current().getTypedData<float>(),
+			cu_buffers.normals_buffer.previous().getTypedData<float>(),
+			cu_buffers.positions_buffer.current().getTypedData<float>(),
+			cu_buffers.positions_buffer.previous().getTypedData<float>(),
+			cu_buffers.noisy_1spp_buffer.current().getTypedData<float>(),
+			cu_buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
+			// TODO: invert the order of the spp buffers
+			cu_buffers.spp_buffer.previous().getTypedData<unsigned char>(),
+			cu_buffers.spp_buffer.current().getTypedData<unsigned char>(),
+			cu_buffers.features_buffer.getTypedData<float>(),
+			cam_mat,
+			pix_off,
+			frame
+		);
+
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.spp_buffer.current(), cu_buffers.spp_buffer.current(), command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_pixel_coords_buffer, cu_buffers.prev_frame_pixel_coords_buffer, command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_bilinear_samples_validity_mask, cu_buffers.prev_frame_bilinear_samples_validity_mask, command_queue);
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
@@ -294,8 +340,17 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		}
 		#endif
 
+		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
+		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
+		{
+			cudaTmpData.features_buffer0.resize(cu_buffers.features_buffer.size() / sizeof(float));
+			K_CUDA_CHECK(cudaMemcpy(cudaTmpData.features_buffer0.data(), cu_buffers.features_buffer.data(), cu_buffers.features_buffer.size(), cudaMemcpyDeviceToHost));
+		}
+		#endif
+
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, command_queue, *cl_buffers.noisy_1spp_buffer.current().data(), GetNoisy1sppBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, cu_buffers.noisy_1spp_buffer.current(), GetNoisy1sppBufferDesc(w, h));
 		#endif
  
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
@@ -305,6 +360,19 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_int), &frame));  // [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL));
 
+		run_fitter(
+			k_fitter_grid_size,
+			k_fitter_block_size,
+			cu_buffers.features_weights_buffer.getTypedData<float>(),
+			cu_buffers.features_min_max_buffer.getTypedData<float>(),
+			cu_buffers.features_buffer.getTypedData<float>(),
+			frame
+		);
+
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_weights_buffer, cu_buffers.features_weights_buffer, command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_min_max_buffer, cu_buffers.features_min_max_buffer, command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 		arg_index = 3;
 		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_mem), cl_buffers.normals_buffer.current().data()));		// [in] Current (world) normals
@@ -313,8 +381,23 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame));										// [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, weighted_sum_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
+		run_weighted_sum(
+			k_workset_grid_size,
+			k_block_size,
+			cu_buffers.features_weights_buffer.getTypedData<float>(),
+			cu_buffers.features_min_max_buffer.getTypedData<float>(),
+			cu_buffers.noisefree_1spp.getTypedData<float>(),
+			cu_buffers.normals_buffer.current().getTypedData<float>(),
+			cu_buffers.positions_buffer.current().getTypedData<float>(),
+			cu_buffers.noisy_1spp_buffer.current().getTypedData<float>(),
+			frame
+		);
+
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisy_1spp_buffer.current(), cu_buffers.noisy_1spp_buffer.current(), command_queue);
+
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, command_queue, *cl_buffers.noisefree_1spp.data(), GetNoiseFree1sppBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, cu_buffers.noisefree_1spp, GetNoiseFree1sppBufferDesc(w, h));
 		#endif
 
 		// Phase III: Postprocessing
@@ -326,8 +409,26 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(accum_filtered_kernel, arg_index++, sizeof(cl_int), &frame));	// [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, accum_filtered_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
+		run_accumulate_filtered_data(
+			k_workset_grid_size,
+			k_block_size,
+			cu_buffers.noisefree_1spp.getTypedData<float>(),
+			cu_buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+			cu_buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
+			cu_buffers.albedo_buffer.getTypedData<float>(),
+			cu_buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+			cu_buffers.spp_buffer.current().getTypedData<unsigned char>(),
+			cu_buffers.noisefree_1spp_accumulated.previous().getTypedData<float>(), 
+			cu_buffers.noisefree_1spp_accumulated.current().getTypedData<float>(),
+			frame
+		);
+
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_acc_tonemapped, cu_buffers.noisefree_1spp_acc_tonemapped, command_queue);
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_accumulated.current(), cu_buffers.noisefree_1spp_accumulated.current(), command_queue);
+
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, command_queue, *cl_buffers.noisefree_1spp_accumulated.current().data(), GetNoiseFree1sppAccumulatedBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, cu_buffers.noisefree_1spp_accumulated.current(), GetNoiseFree1sppAccumulatedBufferDesc(w, h));
 		#endif
 
 		// Phase III: Temporal antialiasing
@@ -337,74 +438,170 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_int), &frame));	// [in]  Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
-		assert(ret == CL_SUCCESS);
+		run_taa(
+			k_workset_grid_size,
+			k_block_size,
+			cu_buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+			cu_buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+			cu_buffers.result_buffer.current().getTypedData<float>(),
+			cu_buffers.result_buffer.previous().getTypedData<float>(),
+			frame
+		);
+
+		// Check results against reference
+		{
+			// OpenCL
+			{
+				const size_t result_buffer_size = cl_buffers.result_buffer.current().size();
+				openclTmpData.result.resize(result_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.result_buffer.current().data(), false, 0, result_buffer_size, openclTmpData.result.data(), 0, NULL, NULL));
+
+				K_OPENCL_CHECK(clFlush(command_queue));
+				K_OPENCL_CHECK(clFinish(command_queue));
+			}
+
+			// Cuda
+			{
+				const size_t result_buffer_size = cu_buffers.result_buffer.current().size();
+				cudaTmpData.result.resize(result_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.result.data(), cu_buffers.result_buffer.current().data(), result_buffer_size, cudaMemcpyDeviceToHost));
+
+				K_CUDA_CHECK(cudaDeviceSynchronize());
+			}
+
+			CheckDiffFloat("result", cudaTmpData.result, openclTmpData.result);
+		}
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
 		{
-			const size_t normals_buffer_size = cl_buffers.normals_buffer.current().size();
-			openclTmpData.normals.resize(normals_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.normals_buffer.current().data(), false, 0, normals_buffer_size, openclTmpData.normals.data(), 0, NULL, NULL));
+			// OpenCL
+			{
+				const size_t normals_buffer_size = cl_buffers.normals_buffer.current().size();
+				openclTmpData.normals.resize(normals_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.normals_buffer.current().data(), false, 0, normals_buffer_size, openclTmpData.normals.data(), 0, NULL, NULL));
 
-			const size_t positions_buffer_size = cl_buffers.positions_buffer.current().size();
-			openclTmpData.positions.resize(positions_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.positions_buffer.current().data(), false, 0, positions_buffer_size, openclTmpData.positions.data(), 0, NULL, NULL));
+				const size_t positions_buffer_size = cl_buffers.positions_buffer.current().size();
+				openclTmpData.positions.resize(positions_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.positions_buffer.current().data(), false, 0, positions_buffer_size, openclTmpData.positions.data(), 0, NULL, NULL));
 
-			const size_t noisy_1spp_buffer_size = cl_buffers.noisy_1spp_buffer.current().size();
-			openclTmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisy_1spp_buffer.current().data(), false, 0, noisy_1spp_buffer_size, openclTmpData.noisy_1spp.data(), 0, NULL, NULL));
+				const size_t noisy_1spp_buffer_size = cl_buffers.noisy_1spp_buffer.current().size();
+				openclTmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisy_1spp_buffer.current().data(), false, 0, noisy_1spp_buffer_size, openclTmpData.noisy_1spp.data(), 0, NULL, NULL));
 
-			const size_t prev_frame_pixel_coords_buffer_size = cl_buffers.prev_frame_pixel_coords_buffer.size();
-			openclTmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.prev_frame_pixel_coords_buffer.data(), false, 0, prev_frame_pixel_coords_buffer_size, openclTmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL));
+				const size_t prev_frame_pixel_coords_buffer_size = cl_buffers.prev_frame_pixel_coords_buffer.size();
+				openclTmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.prev_frame_pixel_coords_buffer.data(), false, 0, prev_frame_pixel_coords_buffer_size, openclTmpData.prev_frame_pixel_coords_buffer.data(), 0, NULL, NULL));
 
-			const size_t prev_frame_bilinear_samples_validity_mask_size = cl_buffers.prev_frame_bilinear_samples_validity_mask.size();
-			openclTmpData.prev_frame_bilinear_samples_validity_mask.resize(prev_frame_bilinear_samples_validity_mask_size / sizeof(unsigned char));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.prev_frame_bilinear_samples_validity_mask.data(), false, 0, prev_frame_bilinear_samples_validity_mask_size, openclTmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL));
+				const size_t prev_frame_bilinear_samples_validity_mask_size = cl_buffers.prev_frame_bilinear_samples_validity_mask.size();
+				openclTmpData.prev_frame_bilinear_samples_validity_mask.resize(prev_frame_bilinear_samples_validity_mask_size / sizeof(unsigned char));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.prev_frame_bilinear_samples_validity_mask.data(), false, 0, prev_frame_bilinear_samples_validity_mask_size, openclTmpData.prev_frame_bilinear_samples_validity_mask.data(), 0, NULL, NULL));
 
-			const size_t spp_buffer_size = cl_buffers.spp_buffer.current().size();
-			openclTmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.spp_buffer.current().data(), false, 0, spp_buffer_size, openclTmpData.spp.data(), 0, NULL, NULL));
+				const size_t spp_buffer_size = cl_buffers.spp_buffer.current().size();
+				openclTmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.spp_buffer.current().data(), false, 0, spp_buffer_size, openclTmpData.spp.data(), 0, NULL, NULL));
 
-			const size_t features_buffer_size = cl_buffers.features_buffer.size();
-			openclTmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_buffer.data(), false, 0, features_buffer_size, openclTmpData.features_buffer1.data(), 0, NULL, NULL));
+				const size_t features_buffer_size = cl_buffers.features_buffer.size();
+				openclTmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_buffer.data(), false, 0, features_buffer_size, openclTmpData.features_buffer1.data(), 0, NULL, NULL));
 
-			const size_t features_weights_buffer_size = cl_buffers.features_weights_buffer.size();
-			openclTmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_weights_buffer.data(), false, 0, features_weights_buffer_size, openclTmpData.features_weights_buffer.data(), 0, NULL, NULL));
+				const size_t features_weights_buffer_size = cl_buffers.features_weights_buffer.size();
+				openclTmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_weights_buffer.data(), false, 0, features_weights_buffer_size, openclTmpData.features_weights_buffer.data(), 0, NULL, NULL));
 
-			const size_t features_min_max_buffer_size = cl_buffers.features_min_max_buffer.size();
-			openclTmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_min_max_buffer.data(), false, 0, features_min_max_buffer_size, openclTmpData.features_min_max_buffer.data(), 0, NULL, NULL));
+				const size_t features_min_max_buffer_size = cl_buffers.features_min_max_buffer.size();
+				openclTmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.features_min_max_buffer.data(), false, 0, features_min_max_buffer_size, openclTmpData.features_min_max_buffer.data(), 0, NULL, NULL));
 
-			const size_t noisefree_1spp_size = cl_buffers.noisefree_1spp.size();
-			openclTmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp.data(), false, 0, noisefree_1spp_size, openclTmpData.noisefree_1spp.data(), 0, NULL, NULL));
+				const size_t noisefree_1spp_size = cl_buffers.noisefree_1spp.size();
+				openclTmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp.data(), false, 0, noisefree_1spp_size, openclTmpData.noisefree_1spp.data(), 0, NULL, NULL));
 
-			const size_t noisefree_1spp_accumulated_size = cl_buffers.noisefree_1spp_accumulated.current().size();
-			openclTmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp_accumulated.current().data(), false, 0, noisefree_1spp_accumulated_size, openclTmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL));
+				const size_t noisefree_1spp_accumulated_size = cl_buffers.noisefree_1spp_accumulated.current().size();
+				openclTmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp_accumulated.current().data(), false, 0, noisefree_1spp_accumulated_size, openclTmpData.noisefree_1spp_accumulated.data(), 0, NULL, NULL));
 
-			const size_t noisefree_1spp_acc_tonemapped_size = cl_buffers.noisefree_1spp_acc_tonemapped.size();
-			openclTmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp_acc_tonemapped.data(), false, 0, noisefree_1spp_acc_tonemapped_size, openclTmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL));
+				const size_t noisefree_1spp_acc_tonemapped_size = cl_buffers.noisefree_1spp_acc_tonemapped.size();
+				openclTmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.noisefree_1spp_acc_tonemapped.data(), false, 0, noisefree_1spp_acc_tonemapped_size, openclTmpData.noisefree_1spp_acc_tonemapped.data(), 0, NULL, NULL));
 
-			const size_t result_buffer_size = cl_buffers.result_buffer.current().size();
-			openclTmpData.result.resize(result_buffer_size / sizeof(float));
-			K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.result_buffer.current().data(), false, 0, result_buffer_size, openclTmpData.result.data(), 0, NULL, NULL));
+				const size_t result_buffer_size = cl_buffers.result_buffer.current().size();
+				openclTmpData.result.resize(result_buffer_size / sizeof(float));
+				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.result_buffer.current().data(), false, 0, result_buffer_size, openclTmpData.result.data(), 0, NULL, NULL));
 
-			K_OPENCL_CHECK(clFlush(command_queue));
-			K_OPENCL_CHECK(clFinish(command_queue));
+				K_OPENCL_CHECK(clFlush(command_queue));
+				K_OPENCL_CHECK(clFinish(command_queue));
+			}
 
+			// Cuda
+			{
+				const size_t normals_buffer_size = cu_buffers.normals_buffer.current().size();
+				cudaTmpData.normals.resize(normals_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.normals.data(), cu_buffers.normals_buffer.current().data(), normals_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t positions_buffer_size = cu_buffers.positions_buffer.current().size();
+				cudaTmpData.positions.resize(positions_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.positions.data(), cu_buffers.positions_buffer.current().data(), positions_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t noisy_1spp_buffer_size = cu_buffers.noisy_1spp_buffer.current().size();
+				cudaTmpData.noisy_1spp.resize(noisy_1spp_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.noisy_1spp.data(), cu_buffers.noisy_1spp_buffer.current().data(), noisy_1spp_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t prev_frame_pixel_coords_buffer_size = cu_buffers.prev_frame_pixel_coords_buffer.size();
+				cudaTmpData.prev_frame_pixel_coords_buffer.resize(prev_frame_pixel_coords_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.prev_frame_pixel_coords_buffer.data(), cu_buffers.prev_frame_pixel_coords_buffer.data(), prev_frame_pixel_coords_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t prev_frame_bilinear_samples_validity_mask_size = cu_buffers.prev_frame_bilinear_samples_validity_mask.size();
+				cudaTmpData.prev_frame_bilinear_samples_validity_mask.resize(prev_frame_bilinear_samples_validity_mask_size / sizeof(unsigned char));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.prev_frame_bilinear_samples_validity_mask.data(), cu_buffers.prev_frame_bilinear_samples_validity_mask.data(), prev_frame_bilinear_samples_validity_mask_size, cudaMemcpyDeviceToHost));
+
+				const size_t spp_buffer_size = cu_buffers.spp_buffer.current().size();
+				cudaTmpData.spp.resize(spp_buffer_size / sizeof(unsigned char));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.spp.data(), cu_buffers.spp_buffer.current().data(), spp_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t features_buffer_size = cu_buffers.features_buffer.size();
+				cudaTmpData.features_buffer1.resize(features_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.features_buffer1.data(), cu_buffers.features_buffer.data(), features_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t features_weights_buffer_size = cu_buffers.features_weights_buffer.size();
+				cudaTmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.features_weights_buffer.data(), cu_buffers.features_weights_buffer.data(), features_weights_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t features_min_max_buffer_size = cu_buffers.features_min_max_buffer.size();
+				cudaTmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.features_min_max_buffer.data(), cu_buffers.features_min_max_buffer.data(), features_min_max_buffer_size, cudaMemcpyDeviceToHost));
+
+				const size_t noisefree_1spp_size = cu_buffers.noisefree_1spp.size();
+				cudaTmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.noisefree_1spp.data(), cu_buffers.noisefree_1spp.data(), noisefree_1spp_size, cudaMemcpyDeviceToHost));
+
+				const size_t noisefree_1spp_accumulated_size = cu_buffers.noisefree_1spp_accumulated.current().size();
+				cudaTmpData.noisefree_1spp_accumulated.resize(noisefree_1spp_accumulated_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.noisefree_1spp_accumulated.data(), cu_buffers.noisefree_1spp_accumulated.current().data(), noisefree_1spp_accumulated_size, cudaMemcpyDeviceToHost));
+
+				const size_t noisefree_1spp_acc_tonemapped_size = cu_buffers.noisefree_1spp_acc_tonemapped.size();
+				cudaTmpData.noisefree_1spp_acc_tonemapped.resize(noisefree_1spp_acc_tonemapped_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.noisefree_1spp_acc_tonemapped.data(), cu_buffers.noisefree_1spp_acc_tonemapped.data(), noisefree_1spp_acc_tonemapped_size, cudaMemcpyDeviceToHost));
+
+				const size_t result_buffer_size = cu_buffers.result_buffer.current().size();
+				cudaTmpData.result.resize(result_buffer_size / sizeof(float));
+				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.result.data(), cu_buffers.result_buffer.current().data(), result_buffer_size, cudaMemcpyDeviceToHost));
+
+				K_CUDA_CHECK(cudaDeviceSynchronize());
+			}
+			
 			return;
 		}
 		#endif
 
 		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *cl_buffers.result_buffer.current().data(), GetResultBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("result", frame, cu_buffers.result_buffer.current(), GetResultBufferDesc(w, h));
 
-		// Swap all double cl_buffers
+		CopyOpenCLBufferToCudaBuffer(cl_buffers.result_buffer.current(), cu_buffers.result_buffer.current(), command_queue);
+
+		// Swap all double buffers
 		std::for_each(opencl_double_buffers.begin(), opencl_double_buffers.end(), std::bind(&Double_buffer<OpenCLDeviceBuffer>::swap, std::placeholders::_1));
+		std::for_each(cuda_double_buffers.begin(), cuda_double_buffers.end(), std::bind(&Double_buffer<CudaDeviceBuffer>::swap, std::placeholders::_1));
 	}
     
 	// Clean up ////////////////////////////////////////////////////////////////

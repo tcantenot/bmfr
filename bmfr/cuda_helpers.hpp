@@ -123,7 +123,7 @@ inline void SaveDevice3Float32ImageToDisk(
 	BufferDesc const & desc
 )
 {
-	assert(buffer.size == desc.w * desc.h * 3 * sizeof(float));
+	assert(buffer.size() == desc.w * desc.h * 3 * sizeof(float));
 	const size_t datasize = desc.byte_size;
 	const size_t numelem  = datasize / sizeof(float);
 	std::vector<float> outdata;
