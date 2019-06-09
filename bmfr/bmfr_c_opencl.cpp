@@ -296,8 +296,8 @@ int bmfr_c_opencl(TmpData & tmpData)
 	const size_t localHeight				= GetLocalHeight();
 	const size_t worksetWidth				= ComputeWorksetWidth(w);
 	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWidthWithMargin		= ComputeWorksetWidthWithMargin(w);
-	const size_t worksetHeightWithMargin	= ComputeWorksetHeightWithMargin(h);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
+	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize();
 

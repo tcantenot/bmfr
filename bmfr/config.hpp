@@ -200,14 +200,31 @@ inline constexpr size_t ComputeWorksetHeight(size_t h)
 	return BlockSize * ((h + BlockSize - 1) / BlockSize);
 }
 
-inline constexpr size_t ComputeWorksetWidthWithMargin(size_t w)
+inline constexpr size_t ComputeWorksetWithMarginWidth(size_t w)
 {
 	return ComputeWorksetWidth(w) + BlockSize;
 }
 
-inline constexpr size_t ComputeWorksetHeightWithMargin(size_t h)
+inline constexpr size_t ComputeWorksetWithMarginHeight(size_t h)
 {
 	return ComputeWorksetHeight(h) + BlockSize;
+}
+
+inline constexpr size_t ComputeWorksetWithMarginBlockCountX(size_t w)
+{
+	return ((w + BlockSize - 1) / BlockSize) + 1;
+	//return ComputeWorksetWithMarginWidth(w) / BlockSize;
+}
+
+inline constexpr size_t ComputeWorksetWithMarginBlockCountY(size_t h)
+{
+	return ((h + BlockSize - 1) / BlockSize) + 1;
+	//return ComputeWorksetWithMarginHeight(h) / BlockSize;
+}
+
+inline constexpr size_t ComputeWorksetWithMarginBlockCount(size_t w, size_t h)
+{
+	return ComputeWorksetWithMarginBlockCountX(w) * ComputeWorksetWithMarginBlockCountY(h);
 }
 
 inline constexpr size_t GetFitterLocalSize()
@@ -256,15 +273,13 @@ inline BufferDesc GetRGB32FWorksetBufferDesc(size_t w, size_t h)
 inline BufferDesc GetRGB32FWorksetWithMarginBufferDesc(size_t w, size_t h)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWidthWithMargin(w);
-	desc.h = ComputeWorksetHeightWithMargin(h);
+	desc.w = ComputeWorksetWithMarginWidth(w);
+	desc.h = ComputeWorksetWithMarginHeight(h);
 	desc.x_stride  = 3 * sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
-
-#if 1
 
 inline BufferDesc GetAlbedoBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
 inline BufferDesc GetNormalsBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
@@ -273,6 +288,7 @@ inline BufferDesc GetNoisy1sppBufferDesc(size_t w, size_t h) { return GetRGB32FB
 inline BufferDesc GetNoiseFree1sppBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
 inline BufferDesc GetNoiseFree1sppAccumulatedBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
 inline BufferDesc GetResultBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
+
 inline BufferDesc GetPrevFramePixelCoordsBufferDesc(size_t w, size_t h)
 {
 	BufferDesc desc;
@@ -283,6 +299,7 @@ inline BufferDesc GetPrevFramePixelCoordsBufferDesc(size_t w, size_t h)
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
+
 inline BufferDesc GetPrevFrameBilinearSamplesValidityMaskBufferDesc(size_t w, size_t h)
 {
 	BufferDesc desc;
@@ -293,7 +310,9 @@ inline BufferDesc GetPrevFrameBilinearSamplesValidityMaskBufferDesc(size_t w, si
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
+
 inline BufferDesc GetNoiseFree1sppAccTonemappedBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
+
 inline BufferDesc GetSppBufferDesc(size_t w, size_t h)
 {
 	BufferDesc desc;
@@ -305,48 +324,38 @@ inline BufferDesc GetSppBufferDesc(size_t w, size_t h)
 	return desc;
 }
 
-#else
-
-inline BufferDesc GetAlbedoBufferDesc(size_t w, size_t h) { return GetRGB32FBufferDesc(w, h); }
-inline BufferDesc GetNormalsBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetPositionsBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetNoisy1sppBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetNoiseFree1sppBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetNoiseFree1sppAccumulatedBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetWithMarginBufferDesc(w, h); }
-inline BufferDesc GetResultBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetPrevFramePixelCoordsBufferDesc(size_t w, size_t h)
+inline BufferDesc GetFeaturesBufferDesc(size_t w, size_t h, size_t features_count, bool bHalfPrecision)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWidth(w);
-	desc.h = ComputeWorksetHeight(h);
-	desc.x_stride  = 2 * sizeof(float);
-	desc.y_stride  = desc.w * desc.x_stride;
-	desc.byte_size = desc.h * desc.y_stride;
-	return desc;
-}
-inline BufferDesc GetPrevFrameBilinearSamplesValidityMaskBufferDesc(size_t w, size_t h)
-{
-	BufferDesc desc;
-	desc.w = ComputeWorksetWidth(w);
-	desc.h = ComputeWorksetHeight(h);
-	desc.x_stride  = 2 * sizeof(unsigned char);
-	desc.y_stride  = desc.w * desc.x_stride;
-	desc.byte_size = desc.h * desc.y_stride;
-	return desc;
-}
-inline BufferDesc GetNoiseFree1sppAccTonemappedBufferDesc(size_t w, size_t h) { return GetRGB32FWorksetBufferDesc(w, h); }
-inline BufferDesc GetSppBufferDesc(size_t w, size_t h)
-{
-	BufferDesc desc;
-	desc.w = ComputeWorksetWidth(w);
-	desc.h = ComputeWorksetHeight(h);
-	desc.x_stride  = sizeof(char);
+	desc.w = ComputeWorksetWithMarginWidth(w) * (features_count + 3); // + 3 for the output color estimate
+	desc.h = ComputeWorksetWithMarginHeight(h);
+	desc.x_stride  = bHalfPrecision ? sizeof(short) : sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
 
-#endif
+inline BufferDesc GetFeaturesWeightsBufferDesc(size_t w, size_t h, size_t features_count)
+{
+	BufferDesc desc;
+	desc.w = ComputeWorksetWithMarginBlockCount(w, h) * features_count * 3;
+	desc.h = 1;
+	desc.x_stride  = sizeof(float);
+	desc.y_stride  = desc.w * desc.x_stride;
+	desc.byte_size = desc.h * desc.y_stride;
+	return desc;
+}
+
+inline BufferDesc GetFeaturesMinMaxBufferDesc(size_t w, size_t h, size_t features_to_scale_count)
+{
+	BufferDesc desc;
+	desc.w = ComputeWorksetWithMarginBlockCount(w, h) * features_to_scale_count * 2;
+	desc.h = 1;
+	desc.x_stride  = sizeof(float);
+	desc.y_stride  = desc.w * desc.x_stride;
+	desc.byte_size = desc.h * desc.y_stride;
+	return desc;
+}
 
 struct TmpData
 {

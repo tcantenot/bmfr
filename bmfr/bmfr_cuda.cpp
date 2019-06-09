@@ -39,8 +39,8 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
 	cudaBufferTotalSize += 2 * noisy_1spp_buffer_size;
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-    const size_t features_buffer_datatype_size = USE_HALF_PRECISION_IN_FEATURES_DATA ? sizeof(short) : sizeof(float);
-	const size_t features_buffer_size = WORKSET_WITH_MARGINS_WIDTH * WORKSET_WITH_MARGINS_HEIGHT * features_count * features_buffer_datatype_size;
+	const BufferDesc featuresBufferDesc = GetFeaturesBufferDesc(w, h, features_count - 3, USE_HALF_PRECISION_IN_FEATURES_DATA);
+	const size_t features_buffer_size = featuresBufferDesc.byte_size;
     buffers.features_buffer.init(features_buffer_size);
 	cudaBufferTotalSize += features_buffer_size;
 
@@ -83,12 +83,14 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
 	cudaBufferTotalSize += noisefree_1spp_acc_tonemapped_size;
 
 	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
-	const size_t features_weights_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * (features_count - 3) * 3 * sizeof(float);
+	const BufferDesc featuresWeightsBufferDesc = GetFeaturesWeightsBufferDesc(w, h, (features_count - 3));
+	const size_t features_weights_buffer_size = featuresWeightsBufferDesc.byte_size;
     buffers.features_weights_buffer.init(features_weights_buffer_size);
 	cudaBufferTotalSize += features_weights_buffer_size;
 
 	// Min and max of features values per block (world_positions) (6 * 2 * float32)
-	const size_t features_min_max_buffer_size = WORKSET_WITH_MARGIN_BLOCK_COUNT * 6 * 2 * sizeof(float);
+	const BufferDesc featuresMinMaxBufferDesc = GetFeaturesMinMaxBufferDesc(w, h, FEATURES_SCALED);
+	const size_t features_min_max_buffer_size = featuresMinMaxBufferDesc.byte_size;
     buffers.features_min_max_buffer.init(features_min_max_buffer_size);
 	cudaBufferTotalSize += features_min_max_buffer_size;
 
@@ -99,8 +101,7 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
     buffers.spp_buffer[1].init(spp_buffer_size);
 	cudaBufferTotalSize += 2 * spp_buffer_size;
 
-	// TODO: change this size to w * h
-    buffers.result_host.resize(3 * OUTPUT_SIZE);
+    buffers.result_host.resize(3 * w * h);
 
 	LOG("CUDA buffers total size: %.3fMB\n", float(cudaBufferTotalSize) / 1024.f / 1024.f);
 }
@@ -153,8 +154,8 @@ int bmfr_cuda(TmpData & tmpData)
 	const size_t localHeight				= GetLocalHeight();
 	const size_t worksetWidth				= ComputeWorksetWidth(w);
 	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWidthWithMargin		= ComputeWorksetWidthWithMargin(w);
-	const size_t worksetHeightWithMargin	= ComputeWorksetHeightWithMargin(h);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
+	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize();
 

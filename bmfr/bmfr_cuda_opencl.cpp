@@ -135,8 +135,8 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	const size_t localHeight				= GetLocalHeight();
 	const size_t worksetWidth				= ComputeWorksetWidth(w);
 	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWidthWithMargin		= ComputeWorksetWidthWithMargin(w);
-	const size_t worksetHeightWithMargin	= ComputeWorksetHeightWithMargin(h);
+	const size_t worksetWithMarginWidth		= ComputeWorksetWithMarginWidth(w);
+	const size_t worksetWithMarginHeight	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize();
 
@@ -158,8 +158,8 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		" -D FEATURE_BUFFERS=" << NOT_SCALED_FEATURE_BUFFERS_STR SCALED_FEATURE_BUFFERS_STR <<
 		" -D LOCAL_WIDTH=" << localWidth <<
 		" -D LOCAL_HEIGHT=" << localHeight <<
-		" -D WORKSET_WITH_MARGINS_WIDTH=" << worksetWidthWithMargin <<
-		" -D WORKSET_WITH_MARGINS_HEIGHT=" << worksetHeightWithMargin <<
+		" -D WORKSET_WITH_MARGINS_WIDTH=" << worksetWithMarginWidth <<
+		" -D WORKSET_WITH_MARGINS_HEIGHT=" << worksetWithMarginHeight <<
 		" -D BLOCK_EDGE_LENGTH=" << STR(BLOCK_EDGE_LENGTH) <<
 		" -D BLOCK_PIXELS=" << BLOCK_PIXELS <<
 		" -D R_EDGE=" << buffer_count - 2 <<
@@ -296,7 +296,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	//	global_size = grid_size * block_size
 	//	local_size = block_size
 
-	const size_t k_workset_with_margin_global_size[] = { worksetWidthWithMargin, worksetHeightWithMargin };
+	const size_t k_workset_with_margin_global_size[] = { worksetWithMarginWidth, worksetWithMarginHeight };
 	const size_t k_workset_global_size[] = { worksetWidth, worksetHeight };
 	const size_t k_local_size[] = { localWidth, localHeight };
 	const size_t k_fitter_global_size[] = { fitterGlobalSize };
@@ -324,7 +324,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
-	const dim3 k_workset_with_margin_grid_size((worksetWidthWithMargin + k_block_size.x - 1) / k_block_size.x, (worksetHeightWithMargin + k_block_size.y - 1) / k_block_size.y);
+	const dim3 k_workset_with_margin_grid_size((worksetWithMarginWidth + k_block_size.x - 1) / k_block_size.x, (worksetWithMarginHeight + k_block_size.y - 1) / k_block_size.y);
     const dim3 k_fitter_block_size(fitterLocalSize);
     const dim3 k_fitter_grid_size((fitterGlobalSize + k_fitter_block_size.x - 1) / k_fitter_block_size.x);
 
