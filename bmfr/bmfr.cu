@@ -34,6 +34,11 @@ inline __device__ void SyncThreads()
 	__syncthreads();
 }
 
+inline __device__ void GlobalMemFence()
+{
+	__syncthreads();
+}
+
 // Parallel reductions /////////////////////////////////////////////////////////
 
 // Unrolled parallel sum reduction of 256 values
@@ -291,14 +296,6 @@ inline __device__ float scale(float value, float min, float max)
 	return value - min;
 }
 
-// Alternative scale method
-inline __device__ float Scale01(float value, float min, float max)
-{
-	const float span = max - min;
-	return (span > 0.0f) ? (value - min) / span : 0.0f;
-}
-
-
 // Mirroring functions /////////////////////////////////////////////////////////
 
 // Simple mirroring of image index if it is out of bounds.
@@ -438,13 +435,13 @@ __global__ void accumulate_noisy_data(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	vec3 current_color = load_float3(current_noisy, linear_pixel);
+	const vec3 current_color = load_float3(current_noisy, linear_pixel);
 
 	// Current frame world position
-	vec4 world_position = vec4(load_float3(current_positions, linear_pixel), 1.f);
+	const vec4 world_position = vec4(load_float3(current_positions, linear_pixel), 1.0f);
 
 	// Current frame (world) normal
-	vec3 normal = load_float3(current_normals, linear_pixel);
+	const vec3 normal = load_float3(current_normals, linear_pixel);
 
 
 	// Previous frame pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
@@ -618,15 +615,7 @@ __global__ void accumulate_noisy_data(
 	{
 		// Index in feature buffer (data are concatenated)
 		// | Block 0 feature 0 | Block 0 feature 0 | ... | Block 0 feature M | ... | Block 1 feature 0 | ... | Block N feature 0 | ... | Block N feature M |
-		#if 0
-		const unsigned int location_in_data = feature_num * BLOCK_PIXELS + 
-			x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
-			x_block * BLOCK_PIXELS * BUFFER_COUNT +
-			y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) *
-			BLOCK_PIXELS * BUFFER_COUNT;
-		#else
 		const unsigned int location_in_data = features_base_offset + feature_num * BLOCK_PIXELS;
-		#endif
 
 		float feature = features[feature_num];
 
@@ -969,11 +958,11 @@ __global__ void fitter(
 					float store_value = LOAD(features_buffer, IN_ACCESS);
 					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
 					#endif
-					store_value -= 2 * u_vec[index] * dotProd / u_length_squared;
+					store_value -= 2.0f * u_vec[index] * dotProd / u_length_squared;
 					STORE(features_buffer, IN_ACCESS, store_value);
 				}
 			}
-			SyncThreads();
+			GlobalMemFence();
 		}
 	}
 
@@ -1157,13 +1146,13 @@ __global__ void weighted_sum(
 extern "C" void run_weighted_sum(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	const float * K_RESTRICT weights,				// [in]	 Features weights computed by the fitter kernel
+	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
-		  float * K_RESTRICT output,				// [out] Noise-free color estimate
-	const float * K_RESTRICT current_normals,		// [in]  Current (world) normals
+		  float * K_RESTRICT output,			// [out] Noise-free color estimate
+	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
 	const float * K_RESTRICT current_positions,	// [in]  Current world positions
 	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number							// [in]  Current frame number
+	const int frame_number						// [in]  Current frame number
 )
 {
 	weighted_sum<<<grid_size, block_size>>>(
@@ -1288,14 +1277,15 @@ __global__ void accumulate_filtered_data(
 		}
 	}
 
-   // Mix with colors and store results
-   vec3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
-   store_float3(accumulated_frame, linear_pixel, accumulated_color);
+	// Mix with colors and store results
+	// Note: CUDA and OpenCL implementation does not yield the same results with the same inputs on the following computation
+	vec3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
+	store_float3(accumulated_frame, linear_pixel, accumulated_color);
 
-   // Remodulate albedo and tone map
-   vec3 albedo = load_float3(albedo_buffer, linear_pixel);
-   const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * accumulated_color), 0.454545f), vec3(0.f), vec3(1.f));
-   store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+	// Remodulate albedo and tone map
+	vec3 albedo = load_float3(albedo_buffer, linear_pixel);
+	const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * accumulated_color), 0.454545f), vec3(0.f), vec3(1.f));
+	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
 }
 
 extern "C" void run_accumulate_filtered_data(
@@ -1367,10 +1357,10 @@ __global__ void taa(
 	}
 
 	// Compute the color AABB in the 3x3 neighbourhood and the min/max in a cross pattern around the current pixel
-	vec3 minimum_box	= +C_FLT_MAX;
-	vec3 minimum_cross	= +C_FLT_MAX;
-	vec3 maximum_box	= -C_FLT_MAX;
-	vec3 maximum_cross	= -C_FLT_MAX;
+	vec3 minimum_box	= vec3(+C_FLT_MAX);
+	vec3 minimum_cross	= vec3(+C_FLT_MAX);
+	vec3 maximum_box	= vec3(-C_FLT_MAX);
+	vec3 maximum_cross	= vec3(-C_FLT_MAX);
 	for(int y = -1; y <= 1; ++y)
 	{
 		for(int x = -1; x <= 1; ++x)
@@ -1441,7 +1431,9 @@ __global__ void taa(
 		}
 	}
 
-	prev_color /= total_weight; // Total weight can be less than one on the edges
+	if(total_weight > 0)
+		prev_color /= total_weight; // Total weight can be less than one on the edges
+
 	vec3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
 
 	// Note: Some references use more complicated methods to move the previous frame color to the YCoCg space AABB

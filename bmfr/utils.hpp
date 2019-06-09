@@ -139,7 +139,7 @@ inline void CheckDiffFloat(char const * name, std::vector<float> const & lhs, st
 			}
 
 			float diff = abs(lhs[i] - rhs[i]);
-			float relDiff = abs(diff) / abs(rhs[i]);
+			float relDiff = (abs(rhs[i]) > 0) ? abs(diff) / abs(rhs[i]) : 0.0f;
 
 			if(diff > maxDiff)
 			{
@@ -157,7 +157,11 @@ inline void CheckDiffFloat(char const * name, std::vector<float> const & lhs, st
 
 	if(maxDiff > 0)
 	{
-		printf("%s[%d]: max diff = %.9g, %.9g != %.9g\n", name, maxDiffIdx, maxDiff, lhs[maxDiffIdx], rhs[maxDiffIdx]);
+		unsigned int ulhs, urhs;
+		memcpy(&ulhs, &lhs[maxDiffIdx], sizeof(ulhs));
+		memcpy(&urhs, &rhs[maxDiffIdx], sizeof(urhs));
+
+		printf("%s[%d]: max diff = %.9g, %.9g != %.9g | %x != %x\n", name, maxDiffIdx, maxDiff, lhs[maxDiffIdx], rhs[maxDiffIdx], ulhs, urhs);
 		printf("%s[%d]: max rel diff = %.9g, %.9g != %.9g\n", name, maxRelDiffIdx, maxRelDiff, lhs[maxRelDiffIdx], rhs[maxRelDiffIdx]);
 	}
 	else

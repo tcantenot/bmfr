@@ -2,6 +2,9 @@
 
 #include <vector>
 
+// TODO:
+// Optimization: flush denormals to zero (-cl-denorms-are-zero and --ftz==true)
+
 #define FRAME_COUNT 60
 #define SAVE_INTERMEDIARY_BUFFERS 0
 #define ENABLE_DEBUG_OUTPUT_TMP_DATA 0
@@ -36,6 +39,9 @@
 #define IMAGE_WIDTH 1280
 #define IMAGE_HEIGHT 720
 
+// Parameters used to determined the validity of reprojected samples
+#define POSITION_LIMIT_SQUARED 0.000900f
+#define NORMAL_LIMIT_SQUARED 0.040000f
 
 // ### Edit these defines if you want to experiment different parameters ###
 // The amount of noise added to feature buffers to cancel sigularities
@@ -68,6 +74,19 @@
 #else
 #define SCALED_FEATURE_BUFFERS_STR ""
 #endif
+
+#define FEATURES_NOT_SCALED 4
+
+#if USE_SCALED_FEATURES
+#define FEATURES_SCALED 6
+#else
+#define FEATURES_SCALED 0
+#endif
+
+#define BUFFER_COUNT (FEATURES_NOT_SCALED + FEATURES_SCALED + 3)
+
+#define R_EDGE (BUFFER_COUNT - 2)
+
 
 // ### Edit these defines to change optimizations for your target hardware ###
 // If 1 uses ~half local memory space for R, but computing indexes is more complicated

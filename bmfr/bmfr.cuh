@@ -4,6 +4,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
+#include "config.hpp"
+
 ////////////////////////////////////////////////////////////////////////////////
 // TODO replace: Placeholders
 
@@ -27,7 +29,7 @@ struct tvec2
 {
 	T x, y;
 
-	__device__ tvec2(T v = T(0)): x(v), y(v) { }
+	__device__ explicit tvec2(T v = T(0)): x(v), y(v) { }
 	__device__ tvec2(T xx, T yy): x(xx), y(yy) { }
 	template <typename U>
 	__device__ tvec2(tvec2<U> const & o): x(o.x), y(o.y) { }
@@ -74,7 +76,7 @@ using cvec3 = tcvec3<float>;
 template <typename T>
 struct tvec3 : public tcvec3<T>
 {
-	__device__ tvec3(T v = 0) { x = v; y = v; z = v; }
+	__device__ explicit tvec3(T v = T(0)) { x = v; y = v; z = v; }
 	__device__ tvec3(T xx, T yy, T zz) { x = xx; y = yy; z = zz; }
 	__device__ tvec3(tcvec3<T> const & o) { x = o.x; y = o.y; z = o.z; }
 	__device__ tvec3 & operator=(tvec3 const & o) { x = o.x; y = o.y; z = o.z; return *this; }
@@ -91,6 +93,13 @@ struct tvec3 : public tcvec3<T>
 
 template <typename T>
 inline __device__ tvec3<T> operator*(T x, tvec3<T> const & v) {	return tvec3<T>(x * v.x, x * v.y, x * v.z); }
+
+template <typename T>
+inline __device__ tvec3<T> operator*(tvec3<T> const & v, T x) {	return tvec3<T>(x * v.x, x * v.y, x * v.z); }
+
+template <typename T>
+inline __device__ tvec3<T> operator/(tvec3<T> const & v, T x) {	return tvec3<T>(v.x / x, v.y / x, v.z / x); }
+
 
 template <typename T>
 inline __device__ tvec3<T> Min(tvec3<T> const & l, tvec3<T> const & r)
@@ -145,7 +154,7 @@ struct tvec4
 {
 	T x, y, z, w;
 
-	__device__ tvec4(T v = 0): x(v), y(v), z(v), w(v) { }
+	__device__ explicit tvec4(T v = T(0)): x(v), y(v), z(v), w(v) { }
 	__device__ tvec4(T xx, T yy, T zz, T ww): x(xx), y(yy), z(zz), w(ww) { }
 	__device__ tvec4(tvec3<T> const & v, T ww): x(v.x), y(v.y), z(v.z), w(ww) { }
 	__device__ tvec4 operator+(tvec4 const & o) { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
@@ -177,25 +186,6 @@ inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
 
 #define C_FLT_MAX INFINITY
 
-
-#define BLOCK_EDGE_LENGTH 32
-#define BLOCK_PIXELS (BLOCK_EDGE_LENGTH * BLOCK_EDGE_LENGTH)
-
-
-// ### Edit these defines if you want to experiment different parameters ###
-
-// Parameters used to determined the validity of reprojected samples
-#define POSITION_LIMIT_SQUARED 0.010000f
-#define NORMAL_LIMIT_SQUARED 1.000000f
-
-// The amount of noise added to feature buffers to cancel sigularities
-#define NOISE_AMOUNT 1e-2f
-
-// The amount of new frame used in accumulated frame (1.f would mean no accumulation).
-#define BLEND_ALPHA 0.2f
-#define SECOND_BLEND_ALPHA 0.1f
-#define TAA_BLEND_ALPHA 0.2f
-
 // NOTE: if you want to use other than normal and world_position data you have to make
 // it available in the first accumulation kernel and in the weighted sum kernel
 #define NOT_SCALED_FEATURE_BUFFERS \
@@ -204,7 +194,6 @@ normal.x,\
 normal.y,\
 normal.z\
 
-#define USE_SCALED_FEATURES 1
 // The next features are not in the range from -1 to 1 so they are scaled to be from 0 to 1.
 #if USE_SCALED_FEATURES
 #define SCALED_FEATURE_BUFFERS \
@@ -219,77 +208,6 @@ world_position.z*world_position.z
 #endif
 
 #define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
-
-#define FEATURES_NOT_SCALED 4
-
-#if USE_SCALED_FEATURES
-#define FEATURES_SCALED 6
-#else
-#define FEATURES_SCALED 0
-#endif
-
-#define BUFFER_COUNT (FEATURES_NOT_SCALED + FEATURES_SCALED + 3)
-
-#define R_EDGE (BUFFER_COUNT - 2)
-
-// 256 is the maximum local size on AMD GCN
-// Synchronization within 32x32=1024 block requires unrolling four times
-#define LOCAL_SIZE 256
-
-////////////////////////////////////////////////////////////////////////////////
-// TODO: Data to send via constants
-
-#define IMAGE_WIDTH 1280
-#define IMAGE_HEIGHT 720
-
-// Rounds image sizes up to next multiple of BLOCK_EDGE_LENGTH
-#define WORKSET_WIDTH  (BLOCK_EDGE_LENGTH * ((IMAGE_WIDTH  + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-#define WORKSET_HEIGHT (BLOCK_EDGE_LENGTH * ((IMAGE_HEIGHT + BLOCK_EDGE_LENGTH - 1) / BLOCK_EDGE_LENGTH))
-
-// We need a margin of one block (BLOCK_EDGE_LENGTH) because we are offsetting the blocks
-// at most one block to the left or the right to avoid blocky artifacts.
-// So most of the time, we have 2 partially filled blocks and BLOCK_COUNT_X-1 full blocks on one row
-
-// Example: image of 8x12 with blocks of 4x1
-
-// No offset: 2x3 = 6 blocks
-// |....|....|
-// |....|....|
-// |....|....|
-
-// With some offset (here (-2, 0)): 3x3 = 9 blocks
-// |--..|....|..--|
-// |--..|....|..--|
-// |--..|....|..--|
-
-// Workset with margin width
-#define WORKSET_WITH_MARGINS_WIDTH (WORKSET_WIDTH + BLOCK_EDGE_LENGTH)
-
-// Workset with margin height
-#define WORKSET_WITH_MARGINS_HEIGHT (WORKSET_HEIGHT + BLOCK_EDGE_LENGTH)
-
-// Number of blocks in X dim in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT_X (WORKSET_WITH_MARGINS_WIDTH  / BLOCK_EDGE_LENGTH)
-
-// Number of blocks in Y dim in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT_Y (WORKSET_WITH_MARGINS_HEIGHT / BLOCK_EDGE_LENGTH)
-
-// Number of block in the workset with margin
-#define WORKSET_WITH_MARGIN_BLOCK_COUNT (WORKSET_WITH_MARGIN_BLOCK_COUNT_X * WORKSET_WITH_MARGIN_BLOCK_COUNT_Y)
-
-
-// ### Edit these defines to change optimizations for your target hardware ###
-// If 1 uses ~half local memory space for R, but computing indexes is more complicated
-#define COMPRESSED_R 1
-
-// If 1 stores tmp_data to private memory when it is loaded for dot product calculation
-#define CACHE_TMP_DATA 1
-
-// If 1 features_data buffer is in half precision for faster load and store.
-// NOTE: if world position values are greater than 256 this cannot be used because
-// 256*256 is infinity in half-precision
-#define USE_HALF_PRECISION_IN_FEATURES_DATA 0
-
 
 
 #define K_RESTRICT

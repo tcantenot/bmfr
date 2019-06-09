@@ -22,10 +22,14 @@
  *  THE SOFTWARE.
  */
 
-
 inline void SyncThreads()
 {
 	barrier(CLK_LOCAL_MEM_FENCE); // Equivalent to CUDA __syncthreads() (https://www.khronos.org/registry/OpenCL/sdk/1.0/docs/man/xhtml/barrier.html)
+}
+
+inline void GlobalMemFence()
+{
+	barrier(CLK_GLOBAL_MEM_FENCE);
 }
 
 // Unrolled parallel sum reduction of 256 values
@@ -233,13 +237,6 @@ static inline float scale(float value, float min, float max)
 	return value - min;
 }
 
-// Alternative scale method
-static inline float Scale01(float value, float min, float max)
-{
-	const float span = max - min;
-	return (span > 0.0f) ? (value - min) / span : 0.0f;
-}
-
 // Simple mirroring of image index if it is out of bounds.
 // NOTE: Works only if index is less than one size out of bounds.
 // NOTE: The mirroring duplicate borders: 3 2 1 0 | 0 1 2 3 | 3 2 1 0
@@ -377,15 +374,14 @@ __kernel void accumulate_noisy_data(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	float3 current_color = load_float3(current_noisy, linear_pixel);
+	const float3 current_color = load_float3(current_noisy, linear_pixel);
 
 	// Current frame world position
 	float4 world_position = (float4){0.f, 0.f, 0.f, 1.f};
 	world_position.xyz = load_float3(current_positions, linear_pixel);
 
 	// Current frame (world) normal
-	float3 normal = load_float3(current_normals, linear_pixel);
-
+	const float3 normal = load_float3(current_normals, linear_pixel);
 
 	// Previous frame pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	// Default is the same pixel coordinates (no movement)
@@ -533,7 +529,7 @@ __kernel void accumulate_noisy_data(
 		// _sat is just extra causion because sample_spp should be less equal than 254
 		new_spp = (sample_spp > 254.f) ? 255 : convert_uchar_sat_rte(sample_spp) + 1;
 	}
-	current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
+	//current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
 
 	float3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // Lerp(previous_color, current_color, blend_alpha);
 
@@ -561,16 +557,6 @@ __kernel void accumulate_noisy_data(
 			y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) *
 			BLOCK_PIXELS * BUFFER_COUNT;
 
-		#if 0
-		// | Block 0 feature 0 | Block 0 feature 0 | ... | Block 0 feature M | ... | Block 1 feature 0 | ... | Block N feature 0 | ... | Block N feature M |
-		const unsigned int numBlockX = WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH;
-		const unsigned int location_in_data = y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) * BLOCK_PIXELS * BUFFER_COUNT +
-											  x_block * BLOCK_PIXELS * BUFFER_COUNT +
-											  feature_num * BLOCK_PIXELS +
-											  y_in_block * BLOCK_EDGE_LENGTH +
-											  x_in_block;
-		#endif
-
 		float feature = features[feature_num];
 
 		if(isnan(feature))
@@ -597,7 +583,7 @@ __kernel void accumulate_noisy_data(
 		store_float3(current_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
 		out_prev_frame_pixel[linear_pixel] = prev_frame_pixel_f; // Previous frame pixel coordinates (to sample history)
 		accept_bools[linear_pixel] = store_accept; // "History validity" bitmask
-		//current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
+		current_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
 	}
 }
 
@@ -840,11 +826,11 @@ __kernel void fitter(
 					float store_value = LOAD(tmp_data, IN_ACCESS);
 					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
 					#endif
-					store_value -= 2 * u_vec[index] * dot / u_length_squared;
+					store_value -= 2.0f * u_vec[index] * dot / u_length_squared;
 					STORE(tmp_data, IN_ACCESS, store_value);
 				}
 			}
-			SyncThreads();
+			GlobalMemFence();
 		}
 	}
 
@@ -1092,14 +1078,14 @@ __kernel void accumulate_filtered_data(
 		}
 	}
 
-   // Mix with colors and store results
-   float3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
-   store_float3(accumulated_frame, linear_pixel, accumulated_color);
+	// Mix with colors and store results
+	float3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
+	store_float3(accumulated_frame, linear_pixel, accumulated_color);
 
-   // Remodulate albedo and tone map
-   float3 my_albedo = load_float3(albedo, linear_pixel);
-   const float3 tone_mapped_color = clamp(powr(max(0.f, my_albedo * accumulated_color), 0.454545f), 0.f, 1.f);
-   store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+	// Remodulate albedo and tone map
+	float3 my_albedo = load_float3(albedo, linear_pixel);
+	const float3 tone_mapped_color = clamp(powr(max(0.f, my_albedo * accumulated_color), 0.454545f), 0.f, 1.f);
+	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
 }
 
 
@@ -1220,7 +1206,9 @@ __kernel void taa(
 		}
 	}
 
-	prev_color /= total_weight; // Total weight can be less than one on the edges
+	if(total_weight > 0)
+		prev_color /= total_weight; // Total weight can be less than one on the edges
+
 	float3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
 
 	// Note: Some references use more complicated methods to move the previous frame color to the YCoCg space AABB

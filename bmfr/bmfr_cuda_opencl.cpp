@@ -24,6 +24,73 @@ void CopyOpenCLBufferToCudaBuffer(OpenCLDeviceBuffer const & src, CudaDeviceBuff
 	K_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+void CompareOpenCLBufferAndCudaBuffer(char const * name, OpenCLDeviceBuffer const & clBuffer, CudaDeviceBuffer const & cuBuffer, cl_command_queue & command_queue)
+{
+	assert(clBuffer.size() == cuBuffer.size());
+
+	const size_t buffer_size = clBuffer.size();
+
+	// OpenCL
+	std::vector<float> clBufferHost;
+	clBufferHost.resize(buffer_size / sizeof(float));
+	K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *clBuffer.data(), false, 0, buffer_size, clBufferHost.data(), 0, NULL, NULL));
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
+
+	// Cuda
+	std::vector<float> cuBufferHost;
+	cuBufferHost.resize(buffer_size / sizeof(float));
+	K_CUDA_CHECK(cudaMemcpy(cuBufferHost.data(), cuBuffer.data(), buffer_size, cudaMemcpyDeviceToHost));
+	K_CUDA_CHECK(cudaDeviceSynchronize());
+
+	CheckDiffFloat(name, cuBufferHost, clBufferHost);
+
+	printf("%s\n", name);
+}
+
+void ClearBuffer(OpenCLDeviceBuffer & clBuffer, cl_command_queue & command_queue, char value = 0)
+{
+	const size_t buffer_size = clBuffer.size();
+	std::vector<char> clBufferHost;
+	clBufferHost.resize(buffer_size);
+	for(size_t i = 0; i < buffer_size; ++i) clBufferHost[i] = value;
+	K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *clBuffer.data(), true, 0, buffer_size, clBufferHost.data(), 0, nullptr, nullptr));
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
+}
+
+void ClearBufferFloat(OpenCLDeviceBuffer & clBuffer, cl_command_queue & command_queue, float value = 0)
+{
+	const size_t buffer_size = clBuffer.size();
+	std::vector<float> clBufferHost;
+	clBufferHost.resize(buffer_size / sizeof(float));
+	for(size_t i = 0; i < clBufferHost.size(); ++i) clBufferHost[i] = value;
+	K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *clBuffer.data(), true, 0, buffer_size, clBufferHost.data(), 0, nullptr, nullptr));
+	K_OPENCL_CHECK(clFlush(command_queue));
+	K_OPENCL_CHECK(clFinish(command_queue));
+}
+
+void ClearBuffer(CudaDeviceBuffer & cuBuffer, char value = 0)
+{
+	const size_t buffer_size = cuBuffer.size();
+	std::vector<char> cuBufferHost;
+	cuBufferHost.resize(buffer_size);
+	for(size_t i = 0; i < buffer_size; ++i) cuBufferHost[i] = value;
+	K_CUDA_CHECK(cudaMemcpy(cuBuffer.data(), cuBufferHost.data(), buffer_size, cudaMemcpyHostToDevice));
+	K_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+
+void ClearBufferFloat(CudaDeviceBuffer & cuBuffer, float value = 0)
+{
+	const size_t buffer_size = cuBuffer.size();
+	std::vector<float> cuBufferHost;
+	cuBufferHost.resize(buffer_size / sizeof(float));
+	for(size_t i = 0; i < cuBufferHost.size(); ++i) cuBufferHost[i] = value;
+	K_CUDA_CHECK(cudaMemcpy(cuBuffer.data(), cuBufferHost.data(), buffer_size, cudaMemcpyHostToDevice));
+	K_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 {
 	// Common init /////////////////////////////////////////////////////////////
@@ -33,14 +100,8 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	std::string features_not_scaled(NOT_SCALED_FEATURE_BUFFERS_STR);
 	std::string features_scaled(SCALED_FEATURE_BUFFERS_STR);
 
-	// + 1 because last one does not have ',' after it.
-	#if USE_SCALED_FEATURES
-	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
-	const auto features_scaled_count = std::count(features_scaled.begin(), features_scaled.end(), ',');
-	#else
-	const auto features_not_scaled_count = std::count(features_not_scaled.begin(), features_not_scaled.end(), ',')+1;
-	const auto features_scaled_count = 0;
-	#endif
+	const int features_not_scaled_count = FEATURES_NOT_SCALED;
+	const int features_scaled_count = FEATURES_SCALED;
 	
 	// + 3 stands for three noisy spp color channels.
 	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
@@ -85,6 +146,8 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	// Create and build the kernel
 	std::stringstream build_options;
 	build_options <<
+		" -cl-opt-disable" <<
+		//" -cl-denorms-are-zero" <<
 		" -D BUFFER_COUNT=" << buffer_count <<
 		" -D FEATURES_NOT_SCALED=" << features_not_scaled_count <<
 		" -D FEATURES_SCALED=" << features_scaled_count <<
@@ -104,8 +167,15 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		" -D BLEND_ALPHA=" << STR(BLEND_ALPHA) <<
 		" -D SECOND_BLEND_ALPHA=" << STR(SECOND_BLEND_ALPHA) <<
 		" -D TAA_BLEND_ALPHA=" << STR(TAA_BLEND_ALPHA) <<
+
+		// TODO: use the values from the scene files
+#if 0
 		" -D POSITION_LIMIT_SQUARED=" << position_limit_squared <<
 		" -D NORMAL_LIMIT_SQUARED=" << normal_limit_squared <<
+#else
+		" -D POSITION_LIMIT_SQUARED=" << POSITION_LIMIT_SQUARED <<
+		" -D NORMAL_LIMIT_SQUARED=" << NORMAL_LIMIT_SQUARED <<
+#endif
 		" -D COMPRESSED_R=" << STR(COMPRESSED_R) <<
 		" -D CACHE_TMP_DATA=" << STR(CACHE_TMP_DATA) <<
 		" -D ADD_REQD_WG_SIZE=" << STR(ADD_REQD_WG_SIZE) <<
@@ -235,7 +305,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 
 	// CUDA init ///////////////////////////////////////////////////////////////
 
-		// Create CUDA buffers
+	// Create CUDA buffers
 
 	LOG("\nAllocate CUDA buffers\n");
 
@@ -327,10 +397,19 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			frame
 		);
 
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.spp_buffer.current(), cu_buffers.spp_buffer.current(), command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_pixel_coords_buffer, cu_buffers.prev_frame_pixel_coords_buffer, command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_bilinear_samples_validity_mask, cu_buffers.prev_frame_bilinear_samples_validity_mask, command_queue);
+		// Check results against reference
+		//CompareOpenCLBufferAndCudaBuffer("spp_buffer", cl_buffers.spp_buffer.current(), cu_buffers.spp_buffer.current(), command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("features_buffer", cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("prev_frame_pixel_coords_buffer", cl_buffers.prev_frame_pixel_coords_buffer, cu_buffers.prev_frame_pixel_coords_buffer, command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("prev_frame_bilinear_samples_validity_mask", cl_buffers.prev_frame_bilinear_samples_validity_mask, cu_buffers.prev_frame_bilinear_samples_validity_mask, command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("noisy_1spp_buffer", cl_buffers.noisy_1spp_buffer.current(), cu_buffers.noisy_1spp_buffer.current(), command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("noisy_1spp_buffer_prev", cl_buffers.noisy_1spp_buffer.previous(), cu_buffers.noisy_1spp_buffer.previous(), command_queue);
+
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.spp_buffer.current(), cu_buffers.spp_buffer.current(), command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_pixel_coords_buffer, cu_buffers.prev_frame_pixel_coords_buffer, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.prev_frame_bilinear_samples_validity_mask, cu_buffers.prev_frame_bilinear_samples_validity_mask, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.noisy_1spp_buffer.current(), cu_buffers.noisy_1spp_buffer.current(), command_queue);
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
@@ -369,9 +448,17 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			frame
 		);
 
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_weights_buffer, cu_buffers.features_weights_buffer, command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_min_max_buffer, cu_buffers.features_min_max_buffer, command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+		// Check results against reference
+		//CompareOpenCLBufferAndCudaBuffer("features_weights_buffer", cl_buffers.features_weights_buffer, cu_buffers.features_weights_buffer, command_queue);
+
+		// Identical!
+		//CompareOpenCLBufferAndCudaBuffer("features_min_max_buffer", cl_buffers.features_min_max_buffer, cu_buffers.features_min_max_buffer, command_queue);
+
+		//CompareOpenCLBufferAndCudaBuffer("features_buffer", cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
+
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.features_weights_buffer, cu_buffers.features_weights_buffer, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.features_min_max_buffer, cu_buffers.features_min_max_buffer, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.features_buffer, cu_buffers.features_buffer, command_queue);
 
 		// Phase II: Compute noise free color estimate (weighted sum of features)
 		arg_index = 3;
@@ -393,7 +480,10 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			frame
 		);
 
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisy_1spp_buffer.current(), cu_buffers.noisy_1spp_buffer.current(), command_queue);
+		// Check results against reference
+		//CompareOpenCLBufferAndCudaBuffer("noisefree_1spp", cl_buffers.noisefree_1spp, cu_buffers.noisefree_1spp, command_queue);
+
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp, cu_buffers.noisefree_1spp, command_queue);
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, command_queue, *cl_buffers.noisefree_1spp.data(), GetNoiseFree1sppBufferDesc(w, h));
@@ -423,8 +513,12 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			frame
 		);
 
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_acc_tonemapped, cu_buffers.noisefree_1spp_acc_tonemapped, command_queue);
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_accumulated.current(), cu_buffers.noisefree_1spp_accumulated.current(), command_queue);
+		// Check results against reference
+		//CompareOpenCLBufferAndCudaBuffer("noisefree_1spp_accumulated", cl_buffers.noisefree_1spp_accumulated.current(), cu_buffers.noisefree_1spp_accumulated.current(), command_queue);
+		//CompareOpenCLBufferAndCudaBuffer("noisefree_1spp_acc_tonemapped", cl_buffers.noisefree_1spp_acc_tonemapped, cu_buffers.noisefree_1spp_acc_tonemapped, command_queue);
+
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_acc_tonemapped, cu_buffers.noisefree_1spp_acc_tonemapped, command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.noisefree_1spp_accumulated.current(), cu_buffers.noisefree_1spp_accumulated.current(), command_queue);
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, command_queue, *cl_buffers.noisefree_1spp_accumulated.current().data(), GetNoiseFree1sppAccumulatedBufferDesc(w, h));
@@ -449,28 +543,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		);
 
 		// Check results against reference
-		{
-			// OpenCL
-			{
-				const size_t result_buffer_size = cl_buffers.result_buffer.current().size();
-				openclTmpData.result.resize(result_buffer_size / sizeof(float));
-				K_OPENCL_CHECK(clEnqueueReadBuffer(command_queue, *cl_buffers.result_buffer.current().data(), false, 0, result_buffer_size, openclTmpData.result.data(), 0, NULL, NULL));
-
-				K_OPENCL_CHECK(clFlush(command_queue));
-				K_OPENCL_CHECK(clFinish(command_queue));
-			}
-
-			// Cuda
-			{
-				const size_t result_buffer_size = cu_buffers.result_buffer.current().size();
-				cudaTmpData.result.resize(result_buffer_size / sizeof(float));
-				K_CUDA_CHECK(cudaMemcpy(cudaTmpData.result.data(), cu_buffers.result_buffer.current().data(), result_buffer_size, cudaMemcpyDeviceToHost));
-
-				K_CUDA_CHECK(cudaDeviceSynchronize());
-			}
-
-			CheckDiffFloat("result", cudaTmpData.result, openclTmpData.result);
-		}
+		CompareOpenCLBufferAndCudaBuffer("result", cl_buffers.result_buffer.current(), cu_buffers.result_buffer.current(), command_queue);
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
 		if(frame == DEBUG_OUTPUT_FRAME_NUMBER)
@@ -597,7 +670,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *cl_buffers.result_buffer.current().data(), GetResultBufferDesc(w, h));
 		SaveDevice3Float32ImageToDisk("result", frame, cu_buffers.result_buffer.current(), GetResultBufferDesc(w, h));
 
-		CopyOpenCLBufferToCudaBuffer(cl_buffers.result_buffer.current(), cu_buffers.result_buffer.current(), command_queue);
+		//CopyOpenCLBufferToCudaBuffer(cl_buffers.result_buffer.current(), cu_buffers.result_buffer.current(), command_queue);
 
 		// Swap all double buffers
 		std::for_each(opencl_double_buffers.begin(), opencl_double_buffers.end(), std::bind(&Double_buffer<OpenCLDeviceBuffer>::swap, std::placeholders::_1));
