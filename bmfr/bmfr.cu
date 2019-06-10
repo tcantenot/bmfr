@@ -358,7 +358,11 @@ inline __device__ void store_float3(float * K_RESTRICT buffer, unsigned int  ind
 	#endif
 }
 
+#if USE_HALF_PRECISION_IN_FEATURES_DATA
+inline __device__ float load_feature(half const * buffer, unsigned int index)
+#else
 inline __device__ float load_feature(float const * buffer, unsigned int index)
+#endif
 {
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	return HalfToFloat(buffer[index]);
@@ -367,7 +371,11 @@ inline __device__ float load_feature(float const * buffer, unsigned int index)
 	#endif
 }
 
+#if USE_HALF_PRECISION_IN_FEATURES_DATA
+inline __device__ void store_feature(half * buffer, unsigned int index, float value)
+#else
 inline __device__ void store_feature(float * buffer, unsigned int index, float value)
+#endif
 {
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	buffer[index] = FloatToHalf(value);
@@ -382,6 +390,7 @@ inline __device__ void store_feature(float * buffer, unsigned int index, float v
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
 
 __global__ void accumulate_noisy_data(
+	AccumulateNoisyDataKernelParams params,
 	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
 	unsigned char* K_RESTRICT accept_bools,			// [out] Validity mask of bilinear samples in previous frame (after reprojection)
 	const float * K_RESTRICT current_normals,		// [in]  Current  (world) normals
@@ -399,22 +408,24 @@ __global__ void accumulate_noisy_data(
 	float * K_RESTRICT features_data,				// [out] Features buffer (single-precision)
 	#endif
 	const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
-	const vec2 pixel_offset,
-	const int frame_number							// [in]  Current frame number
+	const vec2 pixel_offset
 )
 {
 	const ivec2 gid = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
 
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
 	// Mirror indexed of the input. x and y are always less than one size out of
 	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
 	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly frame_number % BLOCK_OFFSETS_COUNT
+	const ivec2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
-	// Pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
-	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(IMAGE_WIDTH, IMAGE_HEIGHT));
+	// Pixel coordinates in [0, w-1]x[0, h-1]
+	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
 
-	// Linear pixel index in image in [0, IMAGE_WIDTH*IMAGE_HEIGHT-1]
-	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
+	// Linear pixel index in image in [0, w*h-1]
+	const int linear_pixel = pixel.y * w + pixel.x;
    
 	// Current frame noisy color (1spp)
 	// [Section 3.1]
@@ -435,7 +446,7 @@ __global__ void accumulate_noisy_data(
 	const vec3 normal = load_float3(current_normals, linear_pixel);
 
 
-	// Previous frame pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
+	// Previous frame pixel coordinates in [0, w-1]x[0, h-1]
 	// Default is the same pixel coordinates (no movement)
 	vec2 prev_frame_pixel_f = vec2(pixel.x, pixel.y);
 
@@ -448,7 +459,7 @@ __global__ void accumulate_noisy_data(
 	vec3 previous_color = vec3(0.f, 0.f, 0.f);
 
 	float sample_spp = 0.f;
-	if(frame_number > 0)
+	if(params.frameNumber > 0)
 	{
 		// Project current world position into previous frame with the previous ViewProj matrix
 
@@ -466,8 +477,8 @@ __global__ void accumulate_noisy_data(
 
 		prev_frame_uv = prev_frame_uv * vec2(0.5f) + vec2(0.5f);
 
-		// Compute the pixel coordinates in the previous frame (in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1])
-		prev_frame_pixel_f = prev_frame_uv * vec2(IMAGE_WIDTH, IMAGE_HEIGHT);
+		// Compute the pixel coordinates in the previous frame (in [0, w-1]x[0, h-1])
+		prev_frame_pixel_f = prev_frame_uv * vec2(w, h);
 
 		// Apply offset (TODO: what offset??? seems to always be 0.5... Maybe TAA/ray subpixel offsets -> send 1-pixel_offset.y)
 		// TODO: try to remove this
@@ -497,10 +508,10 @@ __global__ void accumulate_noisy_data(
 
 			// Check if previous frame color can be used based on its screen location
 			if(sample_location.x >= 0 && sample_location.y >= 0 &&
-			   sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT
+			   sample_location.x < w && sample_location.y < h
 			)
 			{
-				const int linear_sample_location = sample_location.y * IMAGE_WIDTH + sample_location.x;
+				const int linear_sample_location = sample_location.y * w + sample_location.x;
 
 				// Fetch previous frame world position
 				vec3 prev_world_position = load_float3(previous_positions, linear_sample_location);
@@ -578,6 +589,11 @@ __global__ void accumulate_noisy_data(
 		// the threshold BLEND_ALPHA that switch to exponential moving average).
 		// E.g: BLEND_ALPHA = 0.2 = 1 / (n + 1) <=> n = (1 - 0.2) / 0.2 = 4 => above 4 samples for a pixel, we switch to
 		// exponential moving average with alpha = 20%
+		// n = 255 <=> alpha = 1.0 / (255 + 1) = 0.0039
+		
+		// TODO: store "validity mask" along the "spp" in 8 bits: 4-bit validity mask | 4-bit spp
+		// 4-bit spp <=> max n = 2^4-1 = 15 <=> min alpha = 1.0 / (5 + 1) = 0.0625
+
 		new_spp = (sample_spp > 254.f) ? 255 : convert_uchar_sat_rte(sample_spp) + 1;
 	}
 
@@ -599,7 +615,7 @@ __global__ void accumulate_noisy_data(
 
 	const unsigned int features_base_offset = x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
 		x_block * BLOCK_PIXELS * BUFFER_COUNT +
-		y_block * (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH) *
+		y_block * params.worksetWithMarginBlockCountX *
 		BLOCK_PIXELS * BUFFER_COUNT;
 	
 	for(unsigned int feature_num = 0; feature_num < BUFFER_COUNT; ++feature_num)
@@ -610,9 +626,11 @@ __global__ void accumulate_noisy_data(
 
 		float feature = features[feature_num];
 
+		// TODO: remove -> useless
 		if(isnan(feature))
 			feature = 0.0f;
 
+		// TODO: remove -> useless when features will be normalized
 		#if USE_HALF_PRECISION_IN_FEATURES_DATA
 		feature = Clamp(feature, -65504.f, 65504.f);
 		#endif
@@ -627,8 +645,8 @@ __global__ void accumulate_noisy_data(
 	// same block positions on a static scene with a static camera."
 	// --> Only the pixels inside the image (after applying the offsets) should write to the output data that
 	// have the same size of the input image
-	if(pixel_without_mirror.x >= 0 && pixel_without_mirror.x < IMAGE_WIDTH &&
-	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < IMAGE_HEIGHT
+	if(pixel_without_mirror.x >= 0 && pixel_without_mirror.x < w &&
+	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
 	)
 	{
 		store_float3(current_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
@@ -650,6 +668,7 @@ __global__ void accumulate_noisy_data(
 }
 
 extern "C" void run_accumulate_noisy_data(
+	AccumulateNoisyDataKernelParams const & params,
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
@@ -669,11 +688,11 @@ extern "C" void run_accumulate_noisy_data(
 	float * K_RESTRICT features_data,				// [out] Features buffer (single-precision)
 	#endif
 	const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
-	const vec2 pixel_offset,
-	const int frame_number							// [in]  Current frame number
+	const vec2 pixel_offset
 )
 {
 	accumulate_noisy_data<<<grid_size, block_size>>>(
+		params,
 		out_prev_frame_pixel,
 		accept_bools,
 		current_normals,
@@ -687,8 +706,7 @@ extern "C" void run_accumulate_noisy_data(
 		current_spp,
 		features_data,
 		prev_frame_camera_matrix,
-		pixel_offset,
-		frame_number
+		pixel_offset
 	);
 }
 
@@ -864,8 +882,6 @@ __global__ void fitter(
 			u_vec[col_limited] -= vec_length;
 			u_length_squared += u_vec[col_limited] * u_vec[col_limited];
 
-			// TODO: store 1.0f/u_length_squared to avoid multiple divisions later
-
 			// (u_length_squared is now updated length squared)
 			r_value = vec_length;
 		}
@@ -928,12 +944,14 @@ __global__ void fitter(
 			SyncThreads();
 			parallel_reduction_sum_256(&dotProd, pr_data_256, col_limited);
 
+			const float dotFactor = 2.0f * dotProd / u_length_squared;
+
 			// Manual unrolling as the block contains 1024 (32x32) work items and we operate on 256 elements (group size)
 			// -> Compute the sum of N values (N = 1024/256 = 4)
 			for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
 			{
 				const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
-				const int index = threadId + subVector * LOCAL_SIZE;
+				const int index = subVector * LOCAL_SIZE + threadId;
 				if(index >= col_limited)
 				{
 					#if CACHE_TMP_DATA
@@ -943,8 +961,7 @@ __global__ void fitter(
 					const int seed = sub_vector * LOCAL_SIZE + baseFeatureSeed;
 					store_value += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
 					#endif
-					//TODO: move "2.0f * dotProd / u_length_squared" outside the loop
-					store_value -= 2.0f * u_vec[index] * dotProd / u_length_squared;
+					store_value -= dotFactor * u_vec[index];
 					store_feature(features_buffer, featureOffset, store_value);
 				}
 			}
@@ -970,7 +987,7 @@ __global__ void fitter(
 		#else
 		// First values are always zero if R !COMPRESSED_R and
 		// "&& threadId >= i" makes not compressed code run little bit slower
-		if(id < R_EDGE)
+		if(threadId < R_EDGE)
 		#endif
 		{
 			vec3 value = load_r_mat(r_mat, threadId, i);
@@ -996,7 +1013,7 @@ __global__ void fitter(
 		if(threadId < numItems)
 		{
 			// Parallel load
-			const int j = startRIdx + id;
+			const int j = startRIdx + threadId;
 			vec3 value2 = load_r_mat(r_mat, j, i);
 
 			// Then iterate over active threads and gather data from lane 0
@@ -1159,7 +1176,6 @@ __global__ void accumulate_filtered_data(
 		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
 )
 {
-	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
 	
 	const int w = params.sizeX;
@@ -1184,7 +1200,7 @@ __global__ void accumulate_filtered_data(
 
 		if(accept > 0) // If any prev frame sample is accepted
 		{
-			// Pixel coordinates in the previous frame (in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1])
+			// Pixel coordinates in the previous frame (in [0, w-1]x[0, h-1])
 			const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
 			
 			// Integer pixel coordinates in the previous frame

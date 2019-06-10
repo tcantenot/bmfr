@@ -221,7 +221,16 @@ extern "C" void run_test(
 
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
 
+struct AccumulateNoisyDataKernelParams
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+	unsigned int worksetWithMarginBlockCountX;
+	unsigned int frameNumber;
+};
+
 extern "C" void run_accumulate_noisy_data(
+	AccumulateNoisyDataKernelParams const & params,
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	vec2 * K_RESTRICT out_prev_frame_pixel,			// [out] Previous frame pixel coordinates (after reprojection)
@@ -241,8 +250,7 @@ extern "C" void run_accumulate_noisy_data(
 	float * K_RESTRICT features_data,				// [out] Features buffer (single-precision)
 	#endif
 	const mat4x4 prev_frame_camera_matrix,			// [in]  ViewProj matrix of previous frame
-	const vec2 pixel_offset,
-	const int frame_number							// [in]  Current frame number
+	const vec2 pixel_offset
 );
 
 // Fitter kernel ///////////////////////////////////////////////////////////////

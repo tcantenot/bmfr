@@ -378,7 +378,14 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
 		const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
 
+		AccumulateNoisyDataKernelParams accNoisyDataParams;
+		accNoisyDataParams.sizeX = w;
+		accNoisyDataParams.sizeY = h;
+		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		accNoisyDataParams.frameNumber = frame;
+
 		run_accumulate_noisy_data(
+			accNoisyDataParams,
 			k_workset_with_margin_grid_size,
 			k_block_size,
 			cu_buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
@@ -399,8 +406,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			cu_buffers.features_buffer.getTypedData<float>(),
 			#endif
 			cam_mat,
-			pix_off,
-			frame
+			pix_off
 		);
 
 		// Check results against reference
