@@ -293,14 +293,22 @@ extern "C" void run_accumulate_filtered_data(
 
 // TAA kernel //////////////////////////////////////////////////////////////////
 
+
+struct TAAKernelParams
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+	unsigned int frameNumber;
+};
+
 extern "C" void run_taa(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	TAAKernelParams const & params,
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
 	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
 		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
-	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
-	const int frame_number							// [in]  Current frame number
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
 );
 
 ////////////////////////////////////////////////////////////////////////////////

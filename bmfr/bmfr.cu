@@ -326,9 +326,9 @@ inline __device__ half FloatToHalf(float x)
 	return __float2half(x);
 }
 
-inline __device__ half2 FloatToHalf(vec2 v)
+inline __device__ float HalfToFloat(half x)
 {
-	return half2(__float2half(v.x), __float2half(v.y));
+	return __half2float(x);
 }
 #endif
 
@@ -367,25 +367,17 @@ inline __device__ void store_float3(volatile float * K_RESTRICT buffer, const in
 	buffer[index * 3 + 2] = value.z;
 }
 
-// This is significantly slower the the inline function on Vega FE
-//#define store_float3(buffer, index, value) \
-//   buffer[(index) * 3 + 0] = value.x; \
-//   buffer[(index) * 3 + 1] = value.y; \
-//   buffer[(index) * 3 + 2] = value.z
-
-#define load_float3(buffer, index) vec3(buffer[(index) * 3], buffer[(index) * 3 + 1], buffer[(index) * 3 + 2])
-
-// inline __device__ vec3 load_float3(volatile float * K_RESTRICT buffer, const int index)
-// {
-//   return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
-// }
+inline __device__ vec3 load_float3(volatile float const * K_RESTRICT buffer, const int index)
+{
+  return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+}
 
 #if USE_HALF_PRECISION_IN_FEATURES_DATA
-#define LOAD(buffer, index) buffer[index]
-#define STORE(buffer, index, value) buffer[index] = FloatToHalf(value)
+#define LOAD_FEATURE(buffer, index) HalfToFloat(buffer[index])
+#define STORE_FEATURE(buffer, index, value) buffer[index] = FloatToHalf(value)
 #else
-#define LOAD(buffer, index) buffer[index]
-#define STORE(buffer, index, value) buffer[index] = value
+#define LOAD_FEATURE(buffer, index) buffer[index]
+#define STORE_FEATURE(buffer, index, value) buffer[index] = value
 #endif
 
 
@@ -627,7 +619,7 @@ __global__ void accumulate_noisy_data(
 		feature = Clamp(feature, -65504.f, 65504.f);
 		#endif
 
-		STORE(features_data, location_in_data, feature);
+		STORE_FEATURE(features_data, location_in_data, feature);
 	}
 
 	// The kernel works on a workset of size WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT
@@ -782,7 +774,7 @@ __global__ void fitter(
 		const int N = BLOCK_PIXELS / LOCAL_SIZE;
 		for(int sub_vector = 0; sub_vector < N; ++sub_vector)
 		{
-			float value = LOAD(features_buffer, IN_ACCESS);
+			float value = LOAD_FEATURE(features_buffer, IN_ACCESS);
 			tmp_max = Max(value, tmp_max);
 			tmp_min = Min(value, tmp_min);
 		}
@@ -809,8 +801,8 @@ __global__ void fitter(
 		// Scale feature and replace value in features buffer
 		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
 		{
-			float scaled_value = scale(LOAD(features_buffer, IN_ACCESS), block_min, block_max);
-			STORE(features_buffer, IN_ACCESS, scaled_value);
+			float scaled_value = scale(LOAD_FEATURE(features_buffer, IN_ACCESS), block_min, block_max);
+			STORE_FEATURE(features_buffer, IN_ACCESS, scaled_value);
 		}
 	}
 
@@ -845,7 +837,7 @@ __global__ void fitter(
 		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
 		{
 			// Load feature
-			float tmp = LOAD(features_buffer, IN_ACCESS);
+			float tmp = LOAD_FEATURE(features_buffer, IN_ACCESS);
 
 			// Store the feature in shared memory
 			const int index = id + sub_vector * LOCAL_SIZE;
@@ -916,7 +908,7 @@ __global__ void fitter(
 				if(index >= col_limited)
 				{
 					// Load feature
-					float tmp = LOAD(features_buffer, IN_ACCESS);
+					float tmp = LOAD_FEATURE(features_buffer, IN_ACCESS);
 
 					// [Section 3.4] - Stochastic regularization
 					// To handle rank-deficiency in the T matrix, add zero-mean noise to the input buffers
@@ -958,11 +950,11 @@ __global__ void fitter(
 					#if CACHE_TMP_DATA
 					float store_value = tmp_data_private_cache[sub_vector];
 					#else
-					float store_value = LOAD(features_buffer, IN_ACCESS);
+					float store_value = LOAD_FEATURE(features_buffer, IN_ACCESS);
 					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
 					#endif
 					store_value -= 2.0f * u_vec[index] * dotProd / u_length_squared;
-					STORE(features_buffer, IN_ACCESS, store_value);
+					STORE_FEATURE(features_buffer, IN_ACCESS, store_value);
 				}
 			}
 			GlobalMemFence();
@@ -1141,7 +1133,7 @@ __global__ void weighted_sum(
 	// Uncomment this for debugging. Removes fitting completely.
 	//color = load_float3(current_noisy, linear_pixel);
 
-	// Store resutls
+	// Store results
 	store_float3(output, linear_pixel, color);
 }
 
@@ -1201,8 +1193,6 @@ __global__ void accumulate_filtered_data(
 	float blend_alpha = 1.f;
 
 	// Reproject and accumulate previous frame noise-free estimate
-	//!!!!!!
-	// Add "&& false" to debug other kernels (removes accumulation completely)
 	if(frame_number > 0)
 	{
 		// Bitmask telling which bilinear samples were accepted in the first accumulation kernel
@@ -1281,7 +1271,6 @@ __global__ void accumulate_filtered_data(
 	}
 
 	// Mix with colors and store results
-	// Note: CUDA and OpenCL implementation does not yield the same results with the same inputs on the following computation
 	vec3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
 	store_float3(accumulated_frame, linear_pixel, accumulated_color);
 
@@ -1324,21 +1313,24 @@ extern "C" void run_accumulate_filtered_data(
 // - make two versions of the kernel: one for the frame 0 and one for the rest
 // - optimize with local/shared memory
 __global__ void taa(
+	TAAKernelParams params,
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
 	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
 		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
-	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
-	const int frame_number							// [in]  Current frame number
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
 )
 {
 	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
    
-	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
+	if(pixel.x >= w || pixel.y >= h)
 		return;
 
 	// Linear pixel index
-	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
 	// Current frame color
 	vec3 my_new_color = load_float3(new_frame, linear_pixel);
@@ -1347,12 +1339,10 @@ __global__ void taa(
 	const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
 	const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
 
-	//!!!!!!
-	// Add "|| true" to debug other kernels (removes taa)
 	// Return if all sampled pixels are going to be out of image area
-	if(frame_number == 0 ||
+	if(params.frameNumber == 0 ||
 		prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
-		prev_frame_pixel_i.x >= IMAGE_WIDTH || prev_frame_pixel_i.y >= IMAGE_HEIGHT
+		prev_frame_pixel_i.x >= w || prev_frame_pixel_i.y >= h
 	)
 	{
 		store_float3(result_frame, linear_pixel, my_new_color);
@@ -1370,14 +1360,14 @@ __global__ void taa(
 		{
 			ivec2 sample_location = pixel + ivec2(x, y);
 			if(sample_location.x >= 0 && sample_location.y >= 0 &&
-			   sample_location.x < IMAGE_WIDTH && sample_location.y < IMAGE_HEIGHT
+			   sample_location.x < w && sample_location.y < h
 			)
 			{
 				vec3 sample_color;
 				if(x == 0 && y == 0)
 					sample_color = my_new_color;
 				else
-					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * IMAGE_WIDTH);
+					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * w);
 
 				sample_color = RGB_to_YCoCg(sample_color);
 
@@ -1405,31 +1395,31 @@ __global__ void taa(
 		if(prev_frame_pixel_i.x >= 0)
 		{
 			float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x);
 			total_weight += weight;
 		}
 
-		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		if(prev_frame_pixel_i.x < w - 1)
 		{
 			float weight = pixel_fract.x * one_minus_pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1);
 			total_weight += weight;
 		}
 	}
 
-	if(prev_frame_pixel_i.y < IMAGE_HEIGHT - 1)
+	if(prev_frame_pixel_i.y < h - 1)
 	{
 		if(prev_frame_pixel_i.x >= 0)
 		{
 			float weight = one_minus_pixel_fract.x * pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x);
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x);
 			total_weight += weight;
 		}
 
-		if(prev_frame_pixel_i.x < IMAGE_WIDTH - 1)
+		if(prev_frame_pixel_i.x < w - 1)
 		{
 			float weight = pixel_fract.x * pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1);
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1);
 			total_weight += weight;
 		}
 	}
@@ -1451,18 +1441,18 @@ __global__ void taa(
 extern "C" void run_taa(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	TAAKernelParams const & params,
 	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
 	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
 		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
-	const float * K_RESTRICT prev_frame,			// [in]  Previous frame color buffer
-	const int frame_number							// [in]  Current frame number
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
 )
 {
 	taa<<<grid_size, block_size>>>(
+		params,
 		in_prev_frame_pixel,
 		new_frame,
 		result_frame,
-		prev_frame,
-		frame_number
+		prev_frame
 	);
 }

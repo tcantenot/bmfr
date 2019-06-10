@@ -365,15 +365,20 @@ int bmfr_cuda(TmpData & tmpData)
 			k_block_size.y
 		);
 
+		TAAKernelParams params;
+		params.sizeX = w;
+		params.sizeY = h;
+		params.frameNumber = frame;
+
 		taa_timers[frame].start();
 		run_taa(
 			k_workset_grid_size,
 			k_block_size,
+			params,
 			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
 			buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
 			buffers.result_buffer.current().getTypedData<float>(),
-			buffers.result_buffer.previous().getTypedData<float>(),
-			frame
+			buffers.result_buffer.previous().getTypedData<float>()
 		);
 		taa_timers[frame].stop();
 		frame_timers[frame].stop();

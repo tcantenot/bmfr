@@ -542,14 +542,19 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(taa_kernel, arg_index++, sizeof(cl_int), &frame));	// [in]  Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, taa_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
+		TAAKernelParams params;
+		params.sizeX = w;
+		params.sizeY = h;
+		params.frameNumber = frame;
+
 		run_taa(
 			k_workset_grid_size,
 			k_block_size,
+			params,
 			cu_buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
 			cu_buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
 			cu_buffers.result_buffer.current().getTypedData<float>(),
-			cu_buffers.result_buffer.previous().getTypedData<float>(),
-			frame
+			cu_buffers.result_buffer.previous().getTypedData<float>()
 		);
 
 		// Check results against reference
