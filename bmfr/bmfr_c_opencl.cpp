@@ -303,7 +303,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
 	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize();
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
 
 
 	// Create and build the kernel

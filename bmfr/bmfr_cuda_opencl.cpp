@@ -138,7 +138,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	const size_t worksetWithMarginWidth		= ComputeWorksetWithMarginWidth(w);
 	const size_t worksetWithMarginHeight	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize();
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
 
 
 	// OpenCL init /////////////////////////////////////////////////////////////
@@ -393,7 +393,11 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			// TODO: invert the order of the spp buffers
 			cu_buffers.spp_buffer.previous().getTypedData<unsigned char>(),
 			cu_buffers.spp_buffer.current().getTypedData<unsigned char>(),
+			#if USE_HALF_PRECISION_IN_FEATURES_DATA
+			cu_buffers.features_buffer.getTypedData<half>(),
+			#else
 			cu_buffers.features_buffer.getTypedData<float>(),
+			#endif
 			cam_mat,
 			pix_off,
 			frame
@@ -446,7 +450,11 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			k_fitter_block_size,
 			cu_buffers.features_weights_buffer.getTypedData<float>(),
 			cu_buffers.features_min_max_buffer.getTypedData<float>(),
+			#if USE_HALF_PRECISION_IN_FEATURES_DATA
+			cu_buffers.features_buffer.getTypedData<half>(),
+			#else
 			cu_buffers.features_buffer.getTypedData<float>(),
+			#endif
 			frame
 		);
 

@@ -34,9 +34,9 @@ struct tvec2
 	template <typename U>
 	__device__ tvec2(tvec2<U> const & o): x(o.x), y(o.y) { }
 	__device__ tvec2(float2 const & o): x(o.x), y(o.y) { }
-	__device__ tvec2 operator+(tvec2 const & o) { return tvec2(x + o.x, y + o.y); }
-	__device__ tvec2 operator-(tvec2 const & o) { return tvec2(x - o.x, y - o.y); }
-	__device__ tvec2 operator*(tvec2 const & o) { return tvec2(x * o.x, y * o.y); }
+	__device__ tvec2 operator+(tvec2 const & o) const { return tvec2(x + o.x, y + o.y); }
+	__device__ tvec2 operator-(tvec2 const & o) const { return tvec2(x - o.x, y - o.y); }
+	__device__ tvec2 operator*(tvec2 const & o) const { return tvec2(x * o.x, y * o.y); }
 
 	__device__ tvec2 const & operator-=(tvec2<T> const & v) { x -= v.x; y -= v.y; return *this; }
 
@@ -80,9 +80,9 @@ struct tvec3 : public tcvec3<T>
 	__device__ tvec3(T xx, T yy, T zz) { x = xx; y = yy; z = zz; }
 	__device__ tvec3(tcvec3<T> const & o) { x = o.x; y = o.y; z = o.z; }
 	__device__ tvec3 & operator=(tvec3 const & o) { x = o.x; y = o.y; z = o.z; return *this; }
-	__device__ tvec3 operator+(tvec3 const & o) { return tvec3(x + o.x, y + o.y, z + o.z); }
-	__device__ tvec3 operator-(tvec3 const & o) { return tvec3(x - o.x, y - o.y, z - o.z); }
-	__device__ tvec3 operator*(tvec3 const & o) { return tvec3(x * o.x, y * o.y, z * o.z); }
+	__device__ tvec3 operator+(tvec3 const & o) const { return tvec3(x + o.x, y + o.y, z + o.z); }
+	__device__ tvec3 operator-(tvec3 const & o) const { return tvec3(x - o.x, y - o.y, z - o.z); }
+	__device__ tvec3 operator*(tvec3 const & o) const { return tvec3(x * o.x, y * o.y, z * o.z); }
 
 	__device__ tvec3 const & operator+=(tvec3 const & o) { x += o.x; y += o.y; z += o.z; return *this; }
 
@@ -157,8 +157,8 @@ struct tvec4
 	__device__ explicit tvec4(T v = T(0)): x(v), y(v), z(v), w(v) { }
 	__device__ tvec4(T xx, T yy, T zz, T ww): x(xx), y(yy), z(zz), w(ww) { }
 	__device__ tvec4(tvec3<T> const & v, T ww): x(v.x), y(v.y), z(v.z), w(ww) { }
-	__device__ tvec4 operator+(tvec4 const & o) { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
-	__device__ tvec4 operator-(tvec4 const & o) { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
+	__device__ tvec4 operator+(tvec4 const & o) const { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
+	__device__ tvec4 operator-(tvec4 const & o) const { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
 
 	__device__ T operator[](int i) const { return *((&x) + i); }
 

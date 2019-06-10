@@ -161,7 +161,7 @@ int bmfr_cuda(TmpData & tmpData)
 	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
 	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize();
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
 
 
 	// Create CUDA buffers
@@ -245,7 +245,11 @@ int bmfr_cuda(TmpData & tmpData)
 			// TODO: invert the order of the spp buffers
 			buffers.spp_buffer.previous().getTypedData<unsigned char>(),
 			buffers.spp_buffer.current().getTypedData<unsigned char>(),
+			#if USE_HALF_PRECISION_IN_FEATURES_DATA
+			buffers.features_buffer.getTypedData<half>(),
+			#else
 			buffers.features_buffer.getTypedData<float>(),
+			#endif
 			cam_mat,
 			pix_off,
 			frame
@@ -282,7 +286,11 @@ int bmfr_cuda(TmpData & tmpData)
 			k_fitter_block_size,
 			buffers.features_weights_buffer.getTypedData<float>(),
 			buffers.features_min_max_buffer.getTypedData<float>(),
+			#if USE_HALF_PRECISION_IN_FEATURES_DATA
+			buffers.features_buffer.getTypedData<half>(),
+			#else
 			buffers.features_buffer.getTypedData<float>(),
+			#endif
 			frame
 		);
 		fitter_timers[frame].stop();

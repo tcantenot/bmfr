@@ -233,9 +233,9 @@ inline constexpr size_t GetFitterLocalSize()
 	return LOCAL_SIZE;
 }
 
-inline constexpr size_t GetFitterGlobalSize()
+inline constexpr size_t GetFitterGlobalSize(size_t w, size_t h)
 {
-	return FITTER_KERNEL_GLOBAL_RANGE;
+	return GetFitterLocalSize() * ComputeWorksetWithMarginBlockCount(w, h);
 }
 
 struct BufferDesc
