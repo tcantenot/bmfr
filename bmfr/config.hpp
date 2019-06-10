@@ -101,6 +101,12 @@
 // 256*256 is infinity in half-precision
 #define USE_HALF_PRECISION_IN_FEATURES_DATA 0
 
+// Optimize load and store:
+//  - for loads, try to perform 128-bit loads
+//  - for writes, try to perform 64-bit or 128-bit writes
+// TODO: perform more tests -> not sure it's a win...
+#define OPTIMIZE_LOAD_STORE 0
+
 // If 1 adds __attribute__((reqd_work_group_size(256, 1, 1))) to fitter and
 // accumulate_noisy_data kernels. With some codes, attribute made the kernels faster and
 // with some it slowed them down.

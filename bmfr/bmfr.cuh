@@ -157,6 +157,7 @@ struct tvec4
 	__device__ explicit tvec4(T v = T(0)): x(v), y(v), z(v), w(v) { }
 	__device__ tvec4(T xx, T yy, T zz, T ww): x(xx), y(yy), z(zz), w(ww) { }
 	__device__ tvec4(tvec3<T> const & v, T ww): x(v.x), y(v.y), z(v.z), w(ww) { }
+	__device__ tvec4(tvec4 const & v): x(v.x), y(v.y), z(v.z), w(v.w) { }
 	__device__ tvec4 operator+(tvec4 const & o) const { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
 	__device__ tvec4 operator-(tvec4 const & o) const { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
 

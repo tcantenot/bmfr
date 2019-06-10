@@ -43,7 +43,7 @@ inline __device__ void GlobalMemFence()
 
 // Unrolled parallel sum reduction of 256 values
 // TODO: unused start_index...
-inline __device__ void parallel_reduction_sum_256(float * result, volatile float * pr_data_256, const int start_index)
+inline __device__ void parallel_reduction_sum_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256, const int start_index)
 {
 	const int id = threadIdx.x;
 
@@ -66,7 +66,7 @@ inline __device__ void parallel_reduction_sum_256(float * result, volatile float
 
 // TODO: replace by Min4
 // Unrolled parallel min reduction of 256 values
-inline __device__ void parallel_reduction_min_256(float * result, volatile float * pr_data_256)
+inline __device__ void parallel_reduction_min_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256)
 {
 	const int id = threadIdx.x;
 
@@ -90,7 +90,7 @@ inline __device__ void parallel_reduction_min_256(float * result, volatile float
 
 // TODO: replace by Max4
 // Unrolled parallel max reduction of 256 values
-inline __device__ void parallel_reduction_max_256(float * result, volatile float * pr_data_256)
+inline __device__ void parallel_reduction_max_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256)
 {
    const int id = threadIdx.x;
 
@@ -360,17 +360,25 @@ inline __device__ unsigned char convert_uchar_sat_rte(float x)
 
 // Load/store vec3 functions /////////////////////////////////////////////////
 
-inline __device__ void store_float3(volatile float * K_RESTRICT buffer, const int index, const vec3 value)
+inline __device__ void store_float3(float * K_RESTRICT buffer, const int index, const vec3 value)
 {
+	#if OPTIMIZE_LOAD_STORE
+	*reinterpret_cast<vec3 *>(buffer + index * 3) = value;
+	#else
 	buffer[index * 3 + 0] = value.x;
 	buffer[index * 3 + 1] = value.y;
 	buffer[index * 3 + 2] = value.z;
+	#endif
 }
 
-inline __device__ vec3 load_float3(volatile float const * K_RESTRICT buffer, const int index)
+inline __device__ vec3 load_float3(float const * K_RESTRICT buffer, const int index)
 {
-  return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
-}
+	#if OPTIMIZE_LOAD_STORE
+	return (*reinterpret_cast<vec4 const *>(buffer + index * 3)).xyz();
+	#else
+	return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+	#endif
+}	
 
 #if USE_HALF_PRECISION_IN_FEATURES_DATA
 #define LOAD_FEATURE(buffer, index) HalfToFloat(buffer[index])
