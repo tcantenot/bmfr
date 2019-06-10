@@ -274,12 +274,21 @@ extern "C" void run_weighted_sum(
 	const int frame_number						// [in]  Current frame number
 );
 
+
 // Accumulate filtered data kernel /////////////////////////////////////////////
 // -> outputs the noise-free accumulated color estimate + a tonemapped version w/ albedo
+
+struct AccumulateFilteredDataKernelParams
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+	unsigned int frameNumber;
+};
 
 extern "C" void run_accumulate_filtered_data(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams const & params,
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
 	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
@@ -287,12 +296,11 @@ extern "C" void run_accumulate_filtered_data(
 		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
-	const int frame_number								// [in]  Current frame number
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
 );
 
-// TAA kernel //////////////////////////////////////////////////////////////////
 
+// TAA kernel //////////////////////////////////////////////////////////////////
 
 struct TAAKernelParams
 {

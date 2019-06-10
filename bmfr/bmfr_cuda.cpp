@@ -336,10 +336,16 @@ int bmfr_cuda(TmpData & tmpData)
 			k_block_size.y
 		);
 
+		AccumulateFilteredDataKernelParams accFilteredDataParams;
+		accFilteredDataParams.sizeX = w;
+		accFilteredDataParams.sizeY = h;
+		accFilteredDataParams.frameNumber = frame;
+
 		accumulate_noisefree_estimate_timers[frame].start();
 		run_accumulate_filtered_data(
 			k_workset_grid_size,
 			k_block_size,
+			accFilteredDataParams,
 			buffers.noisefree_1spp.getTypedData<float>(),
 			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
 			buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
@@ -347,8 +353,7 @@ int bmfr_cuda(TmpData & tmpData)
 			buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
 			buffers.spp_buffer.current().getTypedData<unsigned char>(),
 			buffers.noisefree_1spp_accumulated.previous().getTypedData<float>(), 
-			buffers.noisefree_1spp_accumulated.current().getTypedData<float>(),
-			frame
+			buffers.noisefree_1spp_accumulated.current().getTypedData<float>()
 		);
 		accumulate_noisefree_estimate_timers[frame].stop();
 
@@ -365,16 +370,16 @@ int bmfr_cuda(TmpData & tmpData)
 			k_block_size.y
 		);
 
-		TAAKernelParams params;
-		params.sizeX = w;
-		params.sizeY = h;
-		params.frameNumber = frame;
+		TAAKernelParams taaParams;
+		taaParams.sizeX = w;
+		taaParams.sizeY = h;
+		taaParams.frameNumber = frame;
 
 		taa_timers[frame].start();
 		run_taa(
 			k_workset_grid_size,
 			k_block_size,
-			params,
+			taaParams,
 			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
 			buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
 			buffers.result_buffer.current().getTypedData<float>(),

@@ -1167,6 +1167,7 @@ extern "C" void run_weighted_sum(
 // TODO: make 2 versions: one for frame 0 and one for the rest (avoid a branch)
 
 __global__ void accumulate_filtered_data(
+	AccumulateFilteredDataKernelParams params,
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
 	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
@@ -1174,18 +1175,20 @@ __global__ void accumulate_filtered_data(
 		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
-	const int frame_number								// [in]  Current frame number
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
 )
 {
 	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
-   
-	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+	
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+	
+	if(pixel.x >= w || pixel.y >= h)
 		return;
 
 	// Linear pixel index
-	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
 	// Noise-free estimate of the color (computed via a weighted sum of features)
 	vec3 filtered_color = load_float3(filtered_frame, linear_pixel);
@@ -1193,7 +1196,7 @@ __global__ void accumulate_filtered_data(
 	float blend_alpha = 1.f;
 
 	// Reproject and accumulate previous frame noise-free estimate
-	if(frame_number > 0)
+	if(params.frameNumber > 0)
 	{
 		// Bitmask telling which bilinear samples were accepted in the first accumulation kernel
 		const unsigned char accept = accept_bools[linear_pixel];
@@ -1217,7 +1220,7 @@ __global__ void accumulate_filtered_data(
 			if(accept & 0x01)
 			{
 				float weight = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
-				int linear_sample_location = prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x;
+				int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
 				total_weight += weight;
 			}
@@ -1225,7 +1228,7 @@ __global__ void accumulate_filtered_data(
 			if(accept & 0x02)
 			{
 				float weight = prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
-				int linear_sample_location = prev_frame_pixel_i.y * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
+				int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
 				total_weight += weight;
 			}
@@ -1233,7 +1236,7 @@ __global__ void accumulate_filtered_data(
 			if(accept & 0x04)
 			{
 				float weight = one_minus_prev_pixel_fract.x * prev_pixel_fract.y;
-				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x;
+				int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
 				total_weight += weight;
 			}
@@ -1241,7 +1244,7 @@ __global__ void accumulate_filtered_data(
 			if(accept & 0x08)
 			{
 				float weight = prev_pixel_fract.x * prev_pixel_fract.y;
-				int linear_sample_location = (prev_frame_pixel_i.y + 1) * IMAGE_WIDTH + prev_frame_pixel_i.x + 1;
+				int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1;
 				prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
 				total_weight += weight;
 			}
@@ -1283,6 +1286,7 @@ __global__ void accumulate_filtered_data(
 extern "C" void run_accumulate_filtered_data(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams const & params,
 	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
 	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
 	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
@@ -1290,11 +1294,11 @@ extern "C" void run_accumulate_filtered_data(
 		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
 	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
 	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
-		  float * K_RESTRICT accumulated_frame,			// [out] Current frame noise-free accumulated color estimate
-	const int frame_number								// [in]  Current frame number
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
 )
 {
 	accumulate_filtered_data<<<grid_size, block_size>>>(
+		params,
 		filtered_frame,
 		in_prev_frame_pixel,
 		accept_bools,
@@ -1302,8 +1306,7 @@ extern "C" void run_accumulate_filtered_data(
 		tone_mapped_frame,
 		current_spp,
 		accumulated_prev_frame,
-		accumulated_frame,
-		frame_number
+		accumulated_frame
 	);
 }
 
@@ -1320,7 +1323,6 @@ __global__ void taa(
 	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
 )
 {
-	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
    
 	const int w = params.sizeX;
