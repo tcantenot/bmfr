@@ -8,6 +8,7 @@ struct BMFROpenCLBuffers
 	OpenCLDeviceBuffer albedo_buffer;
 	Double_buffer<OpenCLDeviceBuffer> normals_buffer;
 	Double_buffer<OpenCLDeviceBuffer> positions_buffer;
+	OpenCLDeviceBuffer frame_noisy_1spp_buffer;
 	Double_buffer<OpenCLDeviceBuffer> noisy_1spp_buffer;
 	OpenCLDeviceBuffer prev_frame_pixel_coords_buffer;
 	OpenCLDeviceBuffer prev_frame_bilinear_samples_validity_mask;

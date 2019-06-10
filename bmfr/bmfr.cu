@@ -398,6 +398,7 @@ __global__ void accumulate_noisy_data(
 	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
 	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
 	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
+	const float * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color buffer
 		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
 	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
 	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
@@ -435,7 +436,7 @@ __global__ void accumulate_noisy_data(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	const vec3 current_color = load_float3(current_noisy, linear_pixel);
+	const vec3 current_color = load_float3(frame_noisy_1spp, linear_pixel);
 
 	// Current frame world position
 	const vec4 world_position = vec4(load_float3(current_positions, linear_pixel), 1.0f);
@@ -667,6 +668,7 @@ extern "C" void run_accumulate_noisy_data(
 	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
 	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
 	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
+	const float * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color buffer
 		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
 	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
 	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
@@ -688,6 +690,7 @@ extern "C" void run_accumulate_noisy_data(
 		previous_normals,
 		current_positions,
 		previous_positions,
+		frame_noisy_1spp,
 		current_noisy,
 		previous_noisy,
 		previous_spp,

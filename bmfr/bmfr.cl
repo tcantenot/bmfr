@@ -334,8 +334,9 @@ __kernel void accumulate_noisy_data(
 	const __global float* restrict previous_normals,		// [in]  Previous (world) normals
 	const __global float* restrict current_positions,		// [in]  Current  world positions
 	const __global float* restrict previous_positions,		// [in]  Previous world positions
-		  __global float* restrict current_noisy,			// [out] Current  noisy 1spp color
-	const __global float* restrict previous_noisy,			// [in]  Previous noisy 1spp color
+	const __global float* restrict frame_noisy_1spp,		// [in]  Frame noisy 1spp color
+		  __global float* restrict current_noisy,			// [out] Current  accumulated noisy 1spp color
+	const __global float* restrict previous_noisy,			// [in]  Previous accumulated noisy 1spp color
 	const __global unsigned char* restrict previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
 		  __global unsigned char* restrict current_spp,		// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
@@ -374,7 +375,7 @@ __kernel void accumulate_noisy_data(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	const float3 current_color = load_float3(current_noisy, linear_pixel);
+	const float3 current_color = load_float3(frame_noisy_1spp, linear_pixel);
 
 	// Current frame world position
 	float4 world_position = (float4){0.f, 0.f, 0.f, 1.f};

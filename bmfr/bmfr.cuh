@@ -210,7 +210,7 @@ world_position.z*world_position.z
 #define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
 
 
-#define K_RESTRICT
+#define K_RESTRICT __restrict__
 
 extern "C" void run_test(
 	dim3 const & grid_size,
@@ -229,8 +229,9 @@ extern "C" void run_accumulate_noisy_data(
 	const float * K_RESTRICT previous_normals,		// [in]  Previous (world) normals
 	const float * K_RESTRICT current_positions,		// [in]  Current  world positions
 	const float * K_RESTRICT previous_positions,	// [in]  Previous world positions
-		  float * K_RESTRICT current_noisy,			// [out] Current  noisy 1spp color
-	const float * K_RESTRICT previous_noisy,		// [in]  Previous noisy 1spp color
+	const float * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color buffer
+		  float * K_RESTRICT current_noisy,			// [out] Current  accumulated noisy 1spp color
+	const float * K_RESTRICT previous_noisy,		// [in]  Previous accumulated noisy 1spp color
 	const unsigned char * K_RESTRICT previous_spp,	// [in]  Previous number of samples accumulated (for CMA)
 		  unsigned char * K_RESTRICT current_spp,	// [out] Current  number of samples accumulated (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA

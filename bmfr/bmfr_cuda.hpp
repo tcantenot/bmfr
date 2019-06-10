@@ -8,6 +8,7 @@ struct BMFRCudaBuffers
 	CudaDeviceBuffer albedo_buffer;
 	Double_buffer<CudaDeviceBuffer> normals_buffer;
 	Double_buffer<CudaDeviceBuffer> positions_buffer;
+	CudaDeviceBuffer frame_noisy_1spp_buffer;
 	Double_buffer<CudaDeviceBuffer> noisy_1spp_buffer;
 	CudaDeviceBuffer prev_frame_pixel_coords_buffer;
 	CudaDeviceBuffer prev_frame_bilinear_samples_validity_mask;

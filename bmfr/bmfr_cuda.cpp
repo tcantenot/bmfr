@@ -30,10 +30,14 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
     buffers.positions_buffer[0].init(positions_buffer_size);
     buffers.positions_buffer[1].init(positions_buffer_size);
 	cudaBufferTotalSize += 2 * positions_buffer_size;
-    
-	// Noisy 1spp color buffer (3 * float32)
+
+	// Frame noisy 1spp color buffer (3 * float32)
 	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
 	const size_t noisy_1spp_buffer_size = noisy1sppBufferDesc.byte_size;
+	buffers.frame_noisy_1spp_buffer.init(noisy_1spp_buffer_size);
+	cudaBufferTotalSize += noisy_1spp_buffer_size;
+    
+	// Accumulated noisy 1spp  color buffer (3 * float32)
 	buffers.noisy_1spp_buffer[0].init(noisy_1spp_buffer_size);
 	buffers.noisy_1spp_buffer[1].init(noisy_1spp_buffer_size);
 	cudaBufferTotalSize += 2 * noisy_1spp_buffer_size;
@@ -204,7 +208,7 @@ int bmfr_cuda(TmpData & tmpData)
 		K_CUDA_CHECK(cudaMemcpy(buffers.albedo_buffer.data(), frameInput.albedos.data(), frameInput.albedos.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(buffers.normals_buffer.current().data(), frameInput.normals.data(), frameInput.normals.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(buffers.positions_buffer.current().data(), frameInput.positions.data(), frameInput.positions.size() * sizeof(float), cudaMemcpyHostToDevice));
-        K_CUDA_CHECK(cudaMemcpy(buffers.noisy_1spp_buffer.current().data(), frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(buffers.frame_noisy_1spp_buffer.data(), frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
 
 		frame_timers[frame].start();
 
@@ -235,6 +239,7 @@ int bmfr_cuda(TmpData & tmpData)
 			buffers.normals_buffer.previous().getTypedData<float>(),
 			buffers.positions_buffer.current().getTypedData<float>(),
 			buffers.positions_buffer.previous().getTypedData<float>(),
+			buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
 			buffers.noisy_1spp_buffer.current().getTypedData<float>(),
 			buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
 			// TODO: invert the order of the spp buffers
@@ -426,7 +431,9 @@ int bmfr_cuda(TmpData & tmpData)
 		}
 		#endif
 
+		#if SAVE_FINAL_RESULT
 		SaveDevice3Float32ImageToDisk("result", frame, buffers.result_buffer.current(), GetResultBufferDesc(w, h));
+		#endif
 
 		// Swap all double buffers
         std::for_each(cuda_double_buffers.begin(), cuda_double_buffers.end(), std::bind(&Double_buffer<CudaDeviceBuffer>::swap, std::placeholders::_1));

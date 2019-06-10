@@ -346,11 +346,11 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.albedo_buffer.data(), blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.normals_buffer.current().data(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.positions_buffer.current().data(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
-		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.noisy_1spp_buffer.current().data(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *cl_buffers.frame_noisy_1spp_buffer.data(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
 		K_CUDA_CHECK(cudaMemcpy(cu_buffers.albedo_buffer.data(), frameInput.albedos.data(), frameInput.albedos.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(cu_buffers.normals_buffer.current().data(), frameInput.normals.data(), frameInput.normals.size() * sizeof(float), cudaMemcpyHostToDevice));
         K_CUDA_CHECK(cudaMemcpy(cu_buffers.positions_buffer.current().data(), frameInput.positions.data(), frameInput.positions.size() * sizeof(float), cudaMemcpyHostToDevice));
-        K_CUDA_CHECK(cudaMemcpy(cu_buffers.noisy_1spp_buffer.current().data(), frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
+        K_CUDA_CHECK(cudaMemcpy(cu_buffers.frame_noisy_1spp_buffer.data(), frameInput.noisy1spps.data(), frameInput.noisy1spps.size() * sizeof(float), cudaMemcpyHostToDevice));
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -362,12 +362,13 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.normals_buffer.current().data()));		// [in]  Current  (world) normals
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.normals_buffer.previous().data()));		// [in]  Previous (world) normals
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.positions_buffer.current().data()));		// [in]  Current  world positions
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.positions_buffer.previous().data()));	// [in]  Previous world positions
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.noisy_1spp_buffer.current().data()));	// [out] Current  noisy 1spp color
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.noisy_1spp_buffer.previous().data()));	// [in]  Previous noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.positions_buffer.previous().data()));		// [in]  Previous world positions
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.frame_noisy_1spp_buffer.data()));			// [in]  Frame noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.noisy_1spp_buffer.current().data()));		// [out] Current  accumulated noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.noisy_1spp_buffer.previous().data()));	// [in]  Previous accumulated noisy 1spp color
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.spp_buffer.previous().data()));			// [in]  Previous number of samples accumulated (for CMA)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.spp_buffer.current().data()));			// [out] Current  number of samples accumulated (for CMA)
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.features_buffer.data()));				// [out] Features buffer (half or single-precision)
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), cl_buffers.features_buffer.data()));					// [out] Features buffer (half or single-precision)
 		const int matrix_index = frame == 0 ? 0 : frame - 1;
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float16), &(camera_matrices[matrix_index][0][0]))); // [in] ViewProj matrix of previous frame
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_float2), &(pixel_offsets[frame][0])));
@@ -386,6 +387,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 			cu_buffers.normals_buffer.previous().getTypedData<float>(),
 			cu_buffers.positions_buffer.current().getTypedData<float>(),
 			cu_buffers.positions_buffer.previous().getTypedData<float>(),
+			cu_buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
 			cu_buffers.noisy_1spp_buffer.current().getTypedData<float>(),
 			cu_buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
 			// TODO: invert the order of the spp buffers
@@ -667,8 +669,10 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		}
 		#endif
 
+		#if SAVE_FINAL_RESULT
 		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *cl_buffers.result_buffer.current().data(), GetResultBufferDesc(w, h));
 		SaveDevice3Float32ImageToDisk("result", frame, cu_buffers.result_buffer.current(), GetResultBufferDesc(w, h));
+		#endif
 
 		//CopyOpenCLBufferToCudaBuffer(cl_buffers.result_buffer.current(), cu_buffers.result_buffer.current(), command_queue);
 

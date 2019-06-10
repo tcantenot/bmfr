@@ -174,9 +174,13 @@ void init_bmfr_opencl_buffers(BMFROpenCLBuffers & buffers, size_t w, size_t h, s
     buffers.positions_buffer[1].init(c, CL_MEM_READ_WRITE, positions_buffer_size);
 	openCLBuffersTotalSize += 2 * positions_buffer_size;
     
-	// Noisy 1spp color buffer (3 * float32)
+	// Frame noisy 1spp color buffer (3 * float32)
 	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
 	const size_t noisy_1spp_buffer_size = noisy1sppBufferDesc.byte_size;
+	buffers.frame_noisy_1spp_buffer.init(c, CL_MEM_READ_ONLY, noisy_1spp_buffer_size);
+	openCLBuffersTotalSize += noisy_1spp_buffer_size;
+
+	// Accumulated noisy 1spp color buffer (3 * float32)
 	buffers.noisy_1spp_buffer[0].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
 	buffers.noisy_1spp_buffer[1].init(c, CL_MEM_READ_WRITE, noisy_1spp_buffer_size);
 	openCLBuffersTotalSize += 2 * noisy_1spp_buffer_size;
@@ -467,7 +471,7 @@ int bmfr_c_opencl(TmpData & tmpData)
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.albedo_buffer.data(), blocking_write, 0, frameInput.albedos.size() * sizeof(float), frameInput.albedos.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.normals_buffer.current().data(), blocking_write, 0, frameInput.normals.size() * sizeof(float), frameInput.normals.data(), 0, nullptr, nullptr));
 		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.positions_buffer.current().data(), blocking_write, 0, frameInput.positions.size() * sizeof(float), frameInput.positions.data(), 0, nullptr, nullptr));
-		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.noisy_1spp_buffer.current().data(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
+		K_OPENCL_CHECK(clEnqueueWriteBuffer(command_queue, *buffers.frame_noisy_1spp_buffer.data(), blocking_write, 0, frameInput.noisy1spps.size() * sizeof(float), frameInput.noisy1spps.data(), 0, nullptr, nullptr));
 
 		// Phase I:
 		//  - accumulate noisy 1spp
@@ -480,8 +484,9 @@ int bmfr_c_opencl(TmpData & tmpData)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.normals_buffer.previous().data()));		// [in]  Previous (world) normals
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.positions_buffer.current().data()));		// [in]  Current  world positions
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.positions_buffer.previous().data()));	// [in]  Previous world positions
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.noisy_1spp_buffer.current().data()));	// [out] Current  noisy 1spp color
-		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.noisy_1spp_buffer.previous().data()));	// [in]  Previous noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.frame_noisy_1spp_buffer.data()));		// [in]  Frame noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.noisy_1spp_buffer.current().data()));	// [out] Current  accumulated noisy 1spp color
+		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.noisy_1spp_buffer.previous().data()));	// [in]  Previous accumulated noisy 1spp color
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.spp_buffer.previous().data()));			// [in]  Previous number of samples accumulated (for CMA)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.spp_buffer.current().data()));			// [out] Current  number of samples accumulated (for CMA)
 		K_OPENCL_CHECK(clSetKernelArg(accum_noisy_kernel, arg_index++, sizeof(cl_mem), buffers.features_buffer.data()));				// [out] Features buffer (half or single-precision)
@@ -607,7 +612,9 @@ int bmfr_c_opencl(TmpData & tmpData)
 		}
 		#endif
 
+		#if SAVE_FINAL_RESULT
 		SaveDevice3Float32ImageToDisk("result", frame, command_queue, *buffers.result_buffer.current().data(), GetResultBufferDesc(w, h));
+		#endif
 
 		// Swap all double buffers
 		std::for_each(opencl_double_buffers.begin(), opencl_double_buffers.end(), std::bind(&Double_buffer<OpenCLDeviceBuffer>::swap, std::placeholders::_1));
