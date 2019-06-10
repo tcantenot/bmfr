@@ -445,17 +445,21 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(fitter_kernel, arg_index++, sizeof(cl_int), &frame));  // [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL));
 
+		FitterKernelParams fitterParams;
+		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		fitterParams.frameNumber = frame;
+
 		run_fitter(
 			k_fitter_grid_size,
 			k_fitter_block_size,
+			fitterParams,
 			cu_buffers.features_weights_buffer.getTypedData<float>(),
 			cu_buffers.features_min_max_buffer.getTypedData<float>(),
 			#if USE_HALF_PRECISION_IN_FEATURES_DATA
-			cu_buffers.features_buffer.getTypedData<half>(),
+			cu_buffers.features_buffer.getTypedData<half>()
 			#else
-			cu_buffers.features_buffer.getTypedData<float>(),
+			cu_buffers.features_buffer.getTypedData<float>()
 			#endif
-			frame
 		);
 
 		// Check results against reference

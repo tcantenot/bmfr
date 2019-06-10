@@ -280,18 +280,22 @@ int bmfr_cuda(TmpData & tmpData)
 			k_fitter_block_size.y
 		);
 
+		FitterKernelParams fitterParams;
+		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		fitterParams.frameNumber = frame;
+
 		fitter_timers[frame].start();
 		run_fitter(
 			k_fitter_grid_size,
 			k_fitter_block_size,
+			fitterParams,
 			buffers.features_weights_buffer.getTypedData<float>(),
 			buffers.features_min_max_buffer.getTypedData<float>(),
 			#if USE_HALF_PRECISION_IN_FEATURES_DATA
-			buffers.features_buffer.getTypedData<half>(),
+			buffers.features_buffer.getTypedData<half>()
 			#else
-			buffers.features_buffer.getTypedData<float>(),
+			buffers.features_buffer.getTypedData<float>()
 			#endif
-			frame
 		);
 		fitter_timers[frame].stop();
 

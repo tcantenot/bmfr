@@ -144,6 +144,7 @@ __device__ __constant__ float2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
 
 // TODO: change these defines either by macro that take parameters or inline functions
 // Helper defines ONLY used in IN_ACCESS define
+#if 0
 #define HORIZONTAL_BLOCKS (WORKSET_WIDTH / BLOCK_EDGE_LENGTH)
 #define BLOCK_INDEX_X (group_id % (HORIZONTAL_BLOCKS + 1))
 #define BLOCK_INDEX_Y (group_id / (HORIZONTAL_BLOCKS + 1))
@@ -152,6 +153,29 @@ __device__ __constant__ float2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
 
 #define IN_ACCESS (IN_BLOCK_INDEX * buffers * BLOCK_PIXELS + FEATURE_START + sub_vector * 256 + id)
 
+#else
+inline __device__ unsigned int ComputeFeaturesBuffersIndex(
+	unsigned int groupId,
+	unsigned int threadId,
+	unsigned int worksetWithMarginBlockCountX,
+	unsigned int featureIndex,
+	unsigned int bufferCount,
+	unsigned int subVector
+)
+{
+	const unsigned int blockIndexX = groupId % worksetWithMarginBlockCountX;
+	const unsigned int blockIndexY = groupId / worksetWithMarginBlockCountX;
+	const unsigned int linearBlockIndex = blockIndexY * worksetWithMarginBlockCountX + blockIndexX;
+
+	// TODO: is bufferCount a constant? If yes, merge "bufferCount * BLOCK_PIXELS"
+	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * bufferCount * BLOCK_PIXELS + threadId;
+	const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
+	const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+	return featureOffset;
+	//return linearBlockIndex * bufferCount * BLOCK_PIXELS + featureIndex * BLOCK_PIXELS + subVector * LOCAL_SIZE + threadId;
+}
+#define IN_ACCESS ComputeFeaturesBuffersIndex(group_id, id, params.worksetWithMarginBlockCountX, feature_buffer, buffers, sub_vector)
+#endif
 
 // R matrix indexing and operations ////////////////////////////////////////////
 
@@ -729,14 +753,14 @@ extern "C" void run_accumulate_noisy_data(
 
 // Block size: (256, 1, 1)
 __global__ void fitter(
+	FitterKernelParams params,
 	float * K_RESTRICT weights,					// [out] Features weights
 	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_buffer			// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_buffer			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number						// [in]  Current frame number
 )
 {
 	// Notes:
@@ -936,7 +960,7 @@ __global__ void fitter(
 					// Note: does not add noise to constant buffer (column 0) and noisy image data (last 3 columns).
 					if(col == 0 && feature_buffer < buffers - 3)
 					{
-						tmp = add_random(tmp, id, sub_vector, feature_buffer, frame_number);
+						tmp = add_random(tmp, id, sub_vector, feature_buffer, params.frameNumber);
 					}
 
 					#if CACHE_TMP_DATA
@@ -971,7 +995,7 @@ __global__ void fitter(
 					float store_value = tmp_data_private_cache[sub_vector];
 					#else
 					float store_value = load_feature(features_buffer, IN_ACCESS);
-					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
+					store_value = add_random(store_value, id, sub_vector, feature_buffer, params.frameNumber);
 					#endif
 					store_value -= 2.0f * u_vec[index] * dotProd / u_length_squared;
 					store_feature(features_buffer, IN_ACCESS, store_value);
@@ -1069,21 +1093,21 @@ __global__ void fitter(
 extern "C" void run_fitter(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	FitterKernelParams const & params,
 	float * K_RESTRICT weights,					// [out] Features weights
 	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_buffer			// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_buffer			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number						// [in]  Current frame number
 )
 {
 	fitter<<<grid_size, block_size>>>(
+		params,
 		weights,
 		mins_maxs,
-		features_buffer,
-		frame_number
+		features_buffer
 	);
 }
 

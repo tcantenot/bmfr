@@ -247,17 +247,23 @@ extern "C" void run_accumulate_noisy_data(
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
 
+struct FitterKernelParams
+{
+	unsigned int worksetWithMarginBlockCountX;
+	unsigned int frameNumber;
+};
+
 extern "C" void run_fitter(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	FitterKernelParams const & params,
 	float * K_RESTRICT weights,					// [out] Features weights
 	float * K_RESTRICT mins_maxs,				// [out] Min and max of features values per block (world_positions)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_buffer,			// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_buffer			// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_buffer,			// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_buffer			// [out] Features buffer (single-precision)
 	#endif
-	const int frame_number						// [in]  Current frame number
 );
 
 // Weighted sum kernel /////////////////////////////////////////////////////////
