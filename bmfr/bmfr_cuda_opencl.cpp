@@ -478,16 +478,21 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clSetKernelArg(weighted_sum_kernel, arg_index++, sizeof(cl_int), &frame));										// [in] Current frame number
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, weighted_sum_kernel, 2, NULL, k_workset_global_size, k_local_size, 0, NULL, NULL));
 
+		WeightedSumKernelParams weightedSumParams;
+		weightedSumParams.sizeX = w;
+		weightedSumParams.sizeY = h;
+		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		weightedSumParams.frameNumber = frame;
+
 		run_weighted_sum(
 			k_workset_grid_size,
 			k_block_size,
+			weightedSumParams,
 			cu_buffers.features_weights_buffer.getTypedData<float>(),
 			cu_buffers.features_min_max_buffer.getTypedData<float>(),
 			cu_buffers.noisefree_1spp.getTypedData<float>(),
 			cu_buffers.normals_buffer.current().getTypedData<float>(),
-			cu_buffers.positions_buffer.current().getTypedData<float>(),
-			cu_buffers.noisy_1spp_buffer.current().getTypedData<float>(),
-			frame
+			cu_buffers.positions_buffer.current().getTypedData<float>()
 		);
 
 		// Check results against reference

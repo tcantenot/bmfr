@@ -360,7 +360,16 @@ inline __device__ unsigned char convert_uchar_sat_rte(float x)
 
 // Load/store vec3 functions /////////////////////////////////////////////////
 
-inline __device__ void store_float3(float * K_RESTRICT buffer, const int index, const vec3 value)
+inline __device__ vec3 load_float3(float const * K_RESTRICT buffer, unsigned int  index)
+{
+	#if OPTIMIZE_LOAD_STORE
+	return (*reinterpret_cast<vec4 const *>(buffer + index * 3)).xyz();
+	#else
+	return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+	#endif
+}	
+
+inline __device__ void store_float3(float * K_RESTRICT buffer, unsigned int  index, vec3 value)
 {
 	#if OPTIMIZE_LOAD_STORE
 	*reinterpret_cast<vec3 *>(buffer + index * 3) = value;
@@ -371,21 +380,24 @@ inline __device__ void store_float3(float * K_RESTRICT buffer, const int index, 
 	#endif
 }
 
-inline __device__ vec3 load_float3(float const * K_RESTRICT buffer, const int index)
+inline __device__ float load_feature(float const * buffer, unsigned int index)
 {
-	#if OPTIMIZE_LOAD_STORE
-	return (*reinterpret_cast<vec4 const *>(buffer + index * 3)).xyz();
+	#if USE_HALF_PRECISION_IN_FEATURES_DATA
+	return HalfToFloat(buffer[index]);
 	#else
-	return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+	return buffer[index];
 	#endif
-}	
+}
 
-#if USE_HALF_PRECISION_IN_FEATURES_DATA
-#define LOAD_FEATURE(buffer, index) HalfToFloat(buffer[index])
-#define STORE_FEATURE(buffer, index, value) buffer[index] = FloatToHalf(value)
-#else
-#define LOAD_FEATURE(buffer, index) buffer[index]
-#define STORE_FEATURE(buffer, index, value) buffer[index] = value
+inline __device__ void store_feature(float * buffer, unsigned int index, float value)
+{
+	#if USE_HALF_PRECISION_IN_FEATURES_DATA
+	buffer[index] = FloatToHalf(value);
+	#else
+	buffer[index] = value;
+	#endif
+}
+
 #endif
 
 
@@ -627,7 +639,7 @@ __global__ void accumulate_noisy_data(
 		feature = Clamp(feature, -65504.f, 65504.f);
 		#endif
 
-		STORE_FEATURE(features_data, location_in_data, feature);
+		store_feature(features_data, location_in_data, feature);
 	}
 
 	// The kernel works on a workset of size WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT
@@ -782,7 +794,7 @@ __global__ void fitter(
 		const int N = BLOCK_PIXELS / LOCAL_SIZE;
 		for(int sub_vector = 0; sub_vector < N; ++sub_vector)
 		{
-			float value = LOAD_FEATURE(features_buffer, IN_ACCESS);
+			float value = load_feature(features_buffer, IN_ACCESS);
 			tmp_max = Max(value, tmp_max);
 			tmp_min = Min(value, tmp_min);
 		}
@@ -809,8 +821,8 @@ __global__ void fitter(
 		// Scale feature and replace value in features buffer
 		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
 		{
-			float scaled_value = scale(LOAD_FEATURE(features_buffer, IN_ACCESS), block_min, block_max);
-			STORE_FEATURE(features_buffer, IN_ACCESS, scaled_value);
+			float scaled_value = scale(load_feature(features_buffer, IN_ACCESS), block_min, block_max);
+			store_feature(features_buffer, IN_ACCESS, scaled_value);
 		}
 	}
 
@@ -845,7 +857,7 @@ __global__ void fitter(
 		for(int sub_vector = 0; sub_vector < BLOCK_PIXELS / LOCAL_SIZE; ++sub_vector)
 		{
 			// Load feature
-			float tmp = LOAD_FEATURE(features_buffer, IN_ACCESS);
+			float tmp = load_feature(features_buffer, IN_ACCESS);
 
 			// Store the feature in shared memory
 			const int index = id + sub_vector * LOCAL_SIZE;
@@ -916,7 +928,7 @@ __global__ void fitter(
 				if(index >= col_limited)
 				{
 					// Load feature
-					float tmp = LOAD_FEATURE(features_buffer, IN_ACCESS);
+					float tmp = load_feature(features_buffer, IN_ACCESS);
 
 					// [Section 3.4] - Stochastic regularization
 					// To handle rank-deficiency in the T matrix, add zero-mean noise to the input buffers
@@ -958,11 +970,11 @@ __global__ void fitter(
 					#if CACHE_TMP_DATA
 					float store_value = tmp_data_private_cache[sub_vector];
 					#else
-					float store_value = LOAD_FEATURE(features_buffer, IN_ACCESS);
+					float store_value = load_feature(features_buffer, IN_ACCESS);
 					store_value = add_random(store_value, id, sub_vector, feature_buffer, frame_number);
 					#endif
 					store_value -= 2.0f * u_vec[index] * dotProd / u_length_squared;
-					STORE_FEATURE(features_buffer, IN_ACCESS, store_value);
+					store_feature(features_buffer, IN_ACCESS, store_value);
 				}
 			}
 			GlobalMemFence();
@@ -1079,32 +1091,28 @@ extern "C" void run_fitter(
 // -> outputs the noise-free 1spp color estimate
 
 __global__ void weighted_sum(
+	WeightedSumKernelParams params,
 	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
 		  float * K_RESTRICT output,			// [out] Noise-free color estimate
 	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
-	const float * K_RESTRICT current_positions,	// [in]  Current world positions
-	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number						// [in]  Current frame number
+	const float * K_RESTRICT current_positions	// [in]  Current world positions
 )
 {
-	// 2D pixel coordinates in [0, IMAGE_WIDTH-1]x[0, IMAGE_HEIGHT-1]
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
 	
-	if(pixel.x >= IMAGE_WIDTH || pixel.y >= IMAGE_HEIGHT)
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
+	if(pixel.x >= w || pixel.y >= h)
 		return;
 
 	// Linear pixel index
-	const int linear_pixel = pixel.y * IMAGE_WIDTH + pixel.x;
-
-	// Load weights and min_max which this pixel should use.
-	const ivec2 offset = BLOCK_OFFSETS[frame_number % BLOCK_OFFSETS_COUNT]; // TODO: input directly 'frame_number%BLOCK_OFFSETS_COUNT'
+	const int linear_pixel = pixel.y * w + pixel.x;
 
 	// Retrieve linear group index from the offset pixel
-	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 offset_pixel = pixel + BLOCK_EDGE_HALF - offset;
-	const int worksetWithMarginBlockCount = (WORKSET_WITH_MARGINS_WIDTH / BLOCK_EDGE_LENGTH); // = worksetBlockCount+1
-	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * worksetWithMarginBlockCount;
+	const ivec2 offset_pixel = pixel + BLOCK_EDGE_HALF - BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * params.worksetWithMarginBlockCountX;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
 	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)
@@ -1137,10 +1145,6 @@ __global__ void weighted_sum(
 	// Remove negative values from every component of the fitting results
 	color = Max(vec3(0.f), color);
 
-	// !!!!!
-	// Uncomment this for debugging. Removes fitting completely.
-	//color = load_float3(current_noisy, linear_pixel);
-
 	// Store results
 	store_float3(output, linear_pixel, color);
 }
@@ -1149,23 +1153,21 @@ __global__ void weighted_sum(
 extern "C" void run_weighted_sum(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	WeightedSumKernelParams const & params,
 	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
 		  float * K_RESTRICT output,			// [out] Noise-free color estimate
 	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
-	const float * K_RESTRICT current_positions,	// [in]  Current world positions
-	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number						// [in]  Current frame number
+	const float * K_RESTRICT current_positions	// [in]  Current world positions
 )
 {
 	weighted_sum<<<grid_size, block_size>>>(
+		params,
 		weights,
 		mins_maxs,
 		output,
 		current_normals,
-		current_positions,
-		current_noisy,
-		frame_number
+		current_positions
 	);
 }
 

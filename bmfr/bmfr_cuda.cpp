@@ -306,17 +306,22 @@ int bmfr_cuda(TmpData & tmpData)
 			k_block_size.y
 		);
 
+		WeightedSumKernelParams weightedSumParams;
+		weightedSumParams.sizeX = w;
+		weightedSumParams.sizeY = h;
+		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		weightedSumParams.frameNumber = frame;
+
 		weighted_sum_timers[frame].start();
 		run_weighted_sum(
 			k_workset_grid_size,
 			k_block_size,
+			weightedSumParams,
 			buffers.features_weights_buffer.getTypedData<float>(),
 			buffers.features_min_max_buffer.getTypedData<float>(),
 			buffers.noisefree_1spp.getTypedData<float>(),
 			buffers.normals_buffer.current().getTypedData<float>(),
-			buffers.positions_buffer.current().getTypedData<float>(),
-			buffers.noisy_1spp_buffer.current().getTypedData<float>(),
-			frame
+			buffers.positions_buffer.current().getTypedData<float>()
 		);
 		weighted_sum_timers[frame].stop();
 

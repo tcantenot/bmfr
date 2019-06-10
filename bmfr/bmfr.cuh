@@ -263,16 +263,23 @@ extern "C" void run_fitter(
 // Weighted sum kernel /////////////////////////////////////////////////////////
 // -> outputs the noise-free 1spp color estimate
 
+struct WeightedSumKernelParams
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+	unsigned int worksetWithMarginBlockCountX;
+	unsigned int frameNumber;
+};
+
 extern "C" void run_weighted_sum(
 	dim3 const & grid_size,
 	dim3 const & block_size,
+	WeightedSumKernelParams const & params,
 	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 	const float * K_RESTRICT mins_maxs,			// [in]  Min and max of features values per block (world_positions)
 		  float * K_RESTRICT output,			// [out] Noise-free color estimate
 	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
-	const float * K_RESTRICT current_positions,	// [in]  Current world positions
-	const float * K_RESTRICT current_noisy,		// [in]  Current noisy 1spp color (only used for debugging)
-	const int frame_number						// [in]  Current frame number
+	const float * K_RESTRICT current_positions	// [in]  Current world positions
 );
 
 
