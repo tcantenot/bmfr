@@ -120,7 +120,8 @@ inline void SaveDevice3Float32ImageToDisk(
 	std::string const & filename,
 	int frame,
 	CudaDeviceBuffer const & buffer,
-	BufferDesc const & desc
+	BufferDesc const & desc,
+	char const * suffix = "_cuda.png"
 )
 {
 	assert(buffer.size() == desc.w * desc.h * 3 * sizeof(float));
@@ -132,7 +133,7 @@ inline void SaveDevice3Float32ImageToDisk(
 	K_CUDA_CHECK(cudaMemcpy(outdata.data(), buffer.data(), datasize, cudaMemcpyDeviceToHost));
 	K_CUDA_CHECK(cudaDeviceSynchronize());
 
-	std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + "_cuda.png";
+	std::string output_filename = OUTPUT_FOLDER + filename + "_" + std::to_string(frame) + suffix;
 
 	// Output image
 	LOG("  Save image %s\n", output_filename.c_str());

@@ -1,12 +1,12 @@
-#include "bmfr_cuda.hpp"
-#include "bmfr.cuh"
+#include "new_bmfr_cuda.hpp"
+#include "new_bmfr.cuh"
 
 #include "cuda_helpers.hpp"
 #include "utils.hpp"
 #include <functional>
 
 
-void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_t features_count)
+void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h, size_t features_count)
 {
 	size_t cudaBufferTotalSize = 0;
 
@@ -92,12 +92,6 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
     buffers.features_weights_buffer.init(features_weights_buffer_size);
 	cudaBufferTotalSize += features_weights_buffer_size;
 
-	// Min and max of features values per block (world_positions) (6 * 2 * float32)
-	const BufferDesc featuresMinMaxBufferDesc = GetFeaturesMinMaxBufferDesc(w, h, FEATURES_SCALED);
-	const size_t features_min_max_buffer_size = featuresMinMaxBufferDesc.byte_size;
-    buffers.features_min_max_buffer.init(features_min_max_buffer_size);
-	cudaBufferTotalSize += features_min_max_buffer_size;
-
 	// Number of samples accumulated (for cumulative moving average) (char 8bits)
 	const BufferDesc sppBufferDesc = GetSppBufferDesc(w, h);
 	const size_t spp_buffer_size = sppBufferDesc.byte_size;
@@ -110,7 +104,7 @@ void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_
 	LOG("CUDA buffers total size: %.3fMB\n", float(cudaBufferTotalSize) / 1024.f / 1024.f);
 }
 
-int bmfr_cuda(TmpData & tmpData)
+int new_bmfr_cuda(TmpData & tmpData)
 {
     LOG("Initialize.\n");
 
@@ -163,13 +157,14 @@ int bmfr_cuda(TmpData & tmpData)
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
 
+	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
 
 	// Create CUDA buffers
 
 	LOG("\nAllocate CUDA buffers\n");
 
-	BMFRCudaBuffers buffers;
-	init_bmfr_cuda_buffers(buffers, w, h, buffer_count);
+	NewBMFRCudaBuffers buffers;
+	init_new_bmfr_cuda_buffers(buffers, w, h, buffer_count);
 
 	std::vector<Double_buffer<CudaDeviceBuffer> *> cuda_double_buffers =
 	{
@@ -182,6 +177,7 @@ int bmfr_cuda(TmpData & tmpData)
 	};
 
 	std::vector<CudaTimer> frame_timers(FRAME_COUNT);
+	std::vector<CudaTimer> rescale_features_timers(FRAME_COUNT);
 	std::vector<CudaTimer> accumulate_noisy_data_timers(FRAME_COUNT);
 	std::vector<CudaTimer> fitter_timers(FRAME_COUNT);
 	std::vector<CudaTimer> weighted_sum_timers(FRAME_COUNT);
@@ -212,6 +208,23 @@ int bmfr_cuda(TmpData & tmpData)
 
 		frame_timers[frame].start();
 
+		// Prolog: rescale features
+		DEBUG_LOG("  Run rescale_features: grid (%d, %d) | block(%d, %d)\n", 
+			k_workset_grid_size.x,
+			k_workset_grid_size.y,
+			k_block_size.x,
+			k_block_size.y
+		);
+
+		rescale_features_timers[frame].start();
+		run_rescale_features(
+			k_workset_grid_size,
+			k_block_size,
+			buffers.positions_buffer.current().getTypedData<float>(),
+			positionsBufferDesc.w *	positionsBufferDesc.h * 3
+		);
+		rescale_features_timers[frame].stop();
+
 		// Phase I:
 		//  - accumulate noisy 1spp
 		//  - compute previous frame pixel coordinates (after reprojection)
@@ -233,33 +246,55 @@ int bmfr_cuda(TmpData & tmpData)
 		accNoisyDataParams.frameNumber = frame;
 
 		accumulate_noisy_data_timers[frame].start();
-        const int matrix_index = frame == 0 ? 0 : frame - 1;
-		const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
-		const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
-		run_accumulate_noisy_data(
-			accNoisyDataParams,
-			k_workset_with_margin_grid_size,
-			k_block_size,
-			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
-			buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
-			buffers.normals_buffer.current().getTypedData<float>(),
-			buffers.normals_buffer.previous().getTypedData<float>(),
-			buffers.positions_buffer.current().getTypedData<float>(),
-			buffers.positions_buffer.previous().getTypedData<float>(),
-			buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
-			buffers.noisy_1spp_buffer.current().getTypedData<float>(),
-			buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
-			// TODO: invert the order of the spp buffers
-			buffers.spp_buffer.previous().getTypedData<unsigned char>(),
-			buffers.spp_buffer.current().getTypedData<unsigned char>(),
-			#if USE_HALF_PRECISION_IN_FEATURES_DATA
-			buffers.features_buffer.getTypedData<half>(),
-			#else
-			buffers.features_buffer.getTypedData<float>(),
-			#endif
-			cam_mat,
-			pix_off
-		);
+
+		if(frame == 0)
+		{
+			run_accumulate_noisy_data_frame0(
+				k_workset_with_margin_grid_size,
+				k_block_size,
+				accNoisyDataParams,
+				buffers.normals_buffer.current().getTypedData<float>(),
+				buffers.positions_buffer.current().getTypedData<float>(),
+				buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
+				buffers.noisy_1spp_buffer.current().getTypedData<float>(),
+				buffers.spp_buffer.current().getTypedData<unsigned char>(),
+				#if USE_HALF_PRECISION_IN_FEATURES_DATA
+				buffers.features_buffer.getTypedData<half>()
+				#else
+				buffers.features_buffer.getTypedData<float>()
+				#endif
+			);
+		}
+		else
+		{
+			const int matrix_index = frame - 1;
+			const mat4x4 cam_mat = *reinterpret_cast<mat4x4 const *>(&camera_matrices[matrix_index][0][0]);
+			const vec2 pix_off = *reinterpret_cast<vec2 const *>(&pixel_offsets[frame][0]);
+			run_new_accumulate_noisy_data(
+				k_workset_with_margin_grid_size,
+				k_block_size,
+				accNoisyDataParams,
+				buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+				buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
+				buffers.normals_buffer.current().getTypedData<float>(),
+				buffers.normals_buffer.previous().getTypedData<float>(),
+				buffers.positions_buffer.current().getTypedData<float>(),
+				buffers.positions_buffer.previous().getTypedData<float>(),
+				buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
+				buffers.noisy_1spp_buffer.current().getTypedData<float>(),
+				buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
+				// TODO: invert the order of the spp buffers
+				buffers.spp_buffer.previous().getTypedData<unsigned char>(),
+				buffers.spp_buffer.current().getTypedData<unsigned char>(),
+				#if USE_HALF_PRECISION_IN_FEATURES_DATA
+				buffers.features_buffer.getTypedData<half>(),
+				#else
+				buffers.features_buffer.getTypedData<float>(),
+				#endif
+				cam_mat,
+				pix_off
+			);
+		}
 		accumulate_noisy_data_timers[frame].stop();
 
 		#if ENABLE_DEBUG_OUTPUT_TMP_DATA
@@ -273,7 +308,7 @@ int bmfr_cuda(TmpData & tmpData)
 		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
-		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, buffers.noisy_1spp_buffer.current(), GetNoisy1sppBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, buffers.noisy_1spp_buffer.current(), GetNoisy1sppBufferDesc(w, h), "_new_cuda.png");
 		#endif
 
 		// Phase II: Blockwise Multi-Order Feature Regression (BMFR)
@@ -291,12 +326,11 @@ int bmfr_cuda(TmpData & tmpData)
 		fitterParams.frameNumber = frame;
 
 		fitter_timers[frame].start();
-		run_fitter(
+		run_new_fitter(
 			k_fitter_grid_size,
 			k_fitter_block_size,
 			fitterParams,
 			buffers.features_weights_buffer.getTypedData<float>(),
-			buffers.features_min_max_buffer.getTypedData<float>(),
 			#if USE_HALF_PRECISION_IN_FEATURES_DATA
 			buffers.features_buffer.getTypedData<half>()
 			#else
@@ -323,12 +357,11 @@ int bmfr_cuda(TmpData & tmpData)
 		weightedSumParams.frameNumber = frame;
 
 		weighted_sum_timers[frame].start();
-		run_weighted_sum(
+		run_new_weighted_sum(
 			k_workset_grid_size,
 			k_block_size,
 			weightedSumParams,
 			buffers.features_weights_buffer.getTypedData<float>(),
-			buffers.features_min_max_buffer.getTypedData<float>(),
 			buffers.noisefree_1spp.getTypedData<float>(),
 			buffers.normals_buffer.current().getTypedData<float>(),
 			buffers.positions_buffer.current().getTypedData<float>()
@@ -338,7 +371,7 @@ int bmfr_cuda(TmpData & tmpData)
 		//K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
-		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, buffers.noisefree_1spp, GetNoiseFree1sppBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisefree_1spp", frame, buffers.noisefree_1spp, GetNoiseFree1sppBufferDesc(w, h), "_new_cuda.png");
 		#endif
 
 		// Phase III: Postprocessing
@@ -373,7 +406,7 @@ int bmfr_cuda(TmpData & tmpData)
 		accumulate_noisefree_estimate_timers[frame].stop();
 
 		#if SAVE_INTERMEDIARY_BUFFERS
-		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, buffers.noisefree_1spp_accumulated.current(), GetNoiseFree1sppAccumulatedBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("noisefree_1spp_accumulated", frame, buffers.noisefree_1spp_accumulated.current(), GetNoiseFree1sppAccumulatedBufferDesc(w, h), "_new_cuda.png");
 		#endif
 
 		// Phase III: Temporal antialiasing
@@ -438,10 +471,6 @@ int bmfr_cuda(TmpData & tmpData)
 			tmpData.features_weights_buffer.resize(features_weights_buffer_size / sizeof(float));
 			K_CUDA_CHECK(cudaMemcpy(tmpData.features_weights_buffer.data(), buffers.features_weights_buffer.data(), features_weights_buffer_size, cudaMemcpyDeviceToHost));
 
-			const size_t features_min_max_buffer_size = buffers.features_min_max_buffer.size();
-			tmpData.features_min_max_buffer.resize(features_min_max_buffer_size / sizeof(float));
-			K_CUDA_CHECK(cudaMemcpy(tmpData.features_min_max_buffer.data(), buffers.features_min_max_buffer.data(), features_min_max_buffer_size, cudaMemcpyDeviceToHost));
-
 			const size_t noisefree_1spp_size = buffers.noisefree_1spp.size();
 			tmpData.noisefree_1spp.resize(noisefree_1spp_size / sizeof(float));
 			K_CUDA_CHECK(cudaMemcpy(tmpData.noisefree_1spp.data(), buffers.noisefree_1spp.data(), noisefree_1spp_size, cudaMemcpyDeviceToHost));
@@ -465,7 +494,7 @@ int bmfr_cuda(TmpData & tmpData)
 		#endif
 
 		#if SAVE_FINAL_RESULT
-		SaveDevice3Float32ImageToDisk("result", frame, buffers.result_buffer.current(), GetResultBufferDesc(w, h));
+		SaveDevice3Float32ImageToDisk("result", frame, buffers.result_buffer.current(), GetResultBufferDesc(w, h), "_new_cuda.png");
 		#endif
 
 		// Swap all double buffers
@@ -477,6 +506,7 @@ int bmfr_cuda(TmpData & tmpData)
 	{
 		float elapsedTime_ms = frame_timers[frame].elaspedTime();
 		LOG("Duration of frame %d: %.3fms\n", frame, elapsedTime_ms);
+		LOG("  rescale features: %.3fms\n", rescale_features_timers[frame].elaspedTime());
 		LOG("  accumulate noisy data: %.3fms\n", accumulate_noisy_data_timers[frame].elaspedTime());
 		LOG("  fitter: %.3fms\n", fitter_timers[frame].elaspedTime());
 		LOG("  weighted sum: %.3fms\n", weighted_sum_timers[frame].elaspedTime());

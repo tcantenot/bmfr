@@ -253,16 +253,14 @@ struct BufferDesc
 	size_t byte_size;
 };
 
-BufferDesc GetRGB32FWorksetBufferDesc(size_t w, size_t h);
-
 inline BufferDesc GetRGB32FBufferDesc(size_t w, size_t h)
 {
 	BufferDesc desc;
 	desc.w = w;
 	desc.h = h;
 	desc.x_stride  = 3 * sizeof(float);
-	desc.y_stride  = desc.w * 3 * sizeof(float);
-	desc.byte_size = desc.w * desc.h * 3 * sizeof(float);
+	desc.y_stride  = desc.w * desc.x_stride;
+	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
 

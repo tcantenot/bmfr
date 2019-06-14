@@ -18,6 +18,9 @@
     <CudaCompile Include="..\bmfr\bmfr.cu">
       <Filter>Cuda</Filter>
     </CudaCompile>
+    <CudaCompile Include="new_bmfr.cu">
+      <Filter>Cuda</Filter>
+    </CudaCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\bmfr\bmfr.cuh">
@@ -46,6 +49,12 @@
       <Filter>Cuda</Filter>
     </ClInclude>
     <ClInclude Include="utils.hpp" />
+    <ClInclude Include="new_bmfr.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="new_bmfr_cuda.hpp">
+      <Filter>Cuda</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bmfr\bmfr_cuda.cpp">
@@ -63,6 +72,9 @@
     <ClCompile Include="..\bmfr\main.cpp" />
     <ClCompile Include="bmfr_cuda_opencl.cpp">
       <Filter>CudaAndOpenCL</Filter>
+    </ClCompile>
+    <ClCompile Include="new_bmfr_cuda.cpp">
+      <Filter>Cuda</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
