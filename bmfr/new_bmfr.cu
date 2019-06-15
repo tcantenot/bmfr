@@ -464,6 +464,8 @@ extern "C" void run_new_accumulate_noisy_data(
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
 
+#define USE_FEATURES_VGPR_CACHE 1
+
 // Block size: (256, 1, 1)
 __global__ void new_fitter(
 	FitterKernelParams params,
@@ -488,7 +490,7 @@ __global__ void new_fitter(
 	#define R_SHARED_DATA_SIZE ((BUFFER_COUNT - 2) * (BUFFER_COUNT - 2))
 	#endif
 
-	__shared__ float pr_shared_data[LOCAL_SIZE];		// Shared memory used to perform parallel reduction (max, min, sum)
+	__shared__ float pr_shared_data[LOCAL_SIZE];		// Shared memory used to perform parallel reduction
 	__shared__ float u_vec_sdata[BLOCK_PIXELS];			// Shared memory used to store the 'u' vectors
 	__shared__ cvec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
 	__shared__ float u_length_squared;					// Shared memory variable that holds the 'u' vector square length
@@ -513,6 +515,33 @@ __global__ void new_fitter(
 	// Otherwise result is OKish, but R is not upper triangular matrix
 	const int limit = (BUFFER_COUNT == BLOCK_PIXELS) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
 
+	
+	#if USE_FEATURES_VGPR_CACHE
+	const unsigned int FeaturesCacheSize = BLOCK_PIXELS / LOCAL_SIZE * BUFFER_COUNT;
+	#if USE_HALF_PRECISION_IN_FEATURES_DATA
+	half featuresCache[FeaturesCacheSize];
+	#else
+	float featuresCache[FeaturesCacheSize];
+	#endif
+
+	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
+	{
+		const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
+		const unsigned int featuresCacheBaseOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+
+		for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
+		{
+			const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+			const unsigned int featuresCacheOffset = featuresCacheBaseOffset + subVector;
+			#if USE_HALF_PRECISION_IN_FEATURES_DATA
+			featuresCache[featuresCacheOffset] = features_buffer[featureOffset];
+			#else
+			featuresCache[featuresCacheOffset] = load_feature(features_buffer, featureOffset);
+			#endif
+		}
+	}
+	#endif
+
 	// Compute R
 	for(int col = 0; col < limit; col++)
 	{
@@ -525,6 +554,10 @@ __global__ void new_fitter(
 		//TODO: reduced scope of this as it is recreated further below
 		const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
 		
+		#if USE_FEATURES_VGPR_CACHE
+		const unsigned int featuresCacheBaseOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+		#endif
+
 		float tmp_sum_value = 0.f;
 
 		// Manual unrolling for parallel reduction as the block contains 1024 (32x32) work items and
@@ -535,7 +568,16 @@ __global__ void new_fitter(
 			const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
 
 			// Load feature
-			float tmp = load_feature(features_buffer, featureOffset);
+			#if USE_FEATURES_VGPR_CACHE
+				const unsigned int featuresCacheOffset = featuresCacheBaseOffset + subVector;
+				#if USE_HALF_PRECISION_IN_FEATURES_DATA
+				float tmp = HalfToFloat(featuresCache[featuresCacheOffset]);
+				#else
+				float tmp = featuresCache[featuresCacheOffset];
+				#endif
+			#else
+				float tmp = load_feature(features_buffer, featureOffset);
+			#endif
 
 			// Store the feature in shared memory
 			const int index = subVector * LOCAL_SIZE + threadId;
@@ -593,6 +635,10 @@ __global__ void new_fitter(
 			const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
 			const unsigned int baseFeatureSeed   = featureIndex * BLOCK_PIXELS + baseSeed;
 
+			#if USE_FEATURES_VGPR_CACHE
+			const unsigned int featuresCacheBaseOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+			#endif
+
 			// Starts by computing dot product with reduction sum function
 			#if CACHE_TMP_DATA
 			// No need to load features_buffer twice because each work-item first copies value for
@@ -608,7 +654,17 @@ __global__ void new_fitter(
 				if(index >= col_limited)
 				{
 					// Load feature
-					float tmp = load_feature(features_buffer, featureOffset);
+
+					#if USE_FEATURES_VGPR_CACHE
+						const unsigned int featuresCacheOffset = featuresCacheBaseOffset + subVector;
+						#if USE_HALF_PRECISION_IN_FEATURES_DATA
+						float tmp = HalfToFloat(featuresCache[featuresCacheOffset]);
+						#else
+						float tmp = featuresCache[featuresCacheOffset];
+						#endif
+					#else
+						float tmp = load_feature(features_buffer, featureOffset);
+					#endif
 
 					// [Section 3.4] - Stochastic regularization
 					// To handle rank-deficiency in the T matrix, add zero-mean noise to the input buffers
@@ -641,18 +697,42 @@ __global__ void new_fitter(
 				const int index = subVector * LOCAL_SIZE + threadId;
 				if(index >= col_limited)
 				{
+					#if USE_FEATURES_VGPR_CACHE
+					const unsigned int featuresCacheOffset = featuresCacheBaseOffset + subVector;
+					#endif
+
 					#if CACHE_TMP_DATA
 					float store_value = tmp_data_private_cache[subVector];
 					#else
-					float store_value = load_feature(features_buffer, featureOffset);
-					const int seed = sub_vector * LOCAL_SIZE + baseFeatureSeed;
+						#if USE_FEATURES_VGPR_CACHE
+							#if USE_HALF_PRECISION_IN_FEATURES_DATA
+							float store_value = HalfToFloat(featuresCache[featuresCacheOffset]);
+							#else
+							float store_value = featuresCache[featuresCacheOffset];
+							#endif
+						#else
+							float store_value = load_feature(features_buffer, featureOffset);
+						#endif
+					const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
 					store_value += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
-					#endif
+					#endif 
+
 					store_value -= dotFactor * u_vec[index];
-					store_feature(features_buffer, featureOffset, store_value);
+
+					#if USE_FEATURES_VGPR_CACHE
+						#if USE_HALF_PRECISION_IN_FEATURES_DATA
+						featuresCache[featuresCacheOffset] = FloatToHalf(store_value);
+						#else
+						featuresCache[featuresCacheOffset] = store_value;
+						#endif
+					#else
+						store_feature(features_buffer, featureOffset, store_value);
+					#endif
 				}
 			}
+			#if !USE_FEATURES_VGPR_CACHE
 			GlobalMemFence();
+			#endif
 		}
 	}
 
