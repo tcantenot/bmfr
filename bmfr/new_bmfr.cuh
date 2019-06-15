@@ -89,3 +89,57 @@ extern "C" void run_new_weighted_sum(
 	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
 	const float * K_RESTRICT current_positions	// [in]  Current world positions
 );
+
+
+// Accumulate filtered data kernel /////////////////////////////////////////////
+// -> outputs the noise-free accumulated color estimate + a tonemapped version w/ albedo
+
+struct AccumulateFilteredDataKernelParams2
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+};
+
+extern "C" void run_accumulate_filtered_data_frame0(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams2 const & params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+);
+
+extern "C" void run_new_accumulate_filtered_data(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams2 const & params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+);
+
+// TAA kernel //////////////////////////////////////////////////////////////////
+
+extern "C" void run_taa_frame0(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	TAAKernelParams const & params,
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame			// [out] Antialiased frame color buffer
+);
+
+extern "C" void run_new_taa(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	TAAKernelParams const & params,
+	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
+);

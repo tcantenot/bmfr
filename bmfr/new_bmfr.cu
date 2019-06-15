@@ -834,3 +834,376 @@ extern "C" void run_new_weighted_sum(
 		current_positions
 	);
 }
+
+// Accumulate filtered data kernel /////////////////////////////////////////////
+// -> outputs the noise-free accumulated color estimate + a tonemapped version w/ albedo
+
+__global__ void accumulate_filtered_data_frame0(
+	AccumulateFilteredDataKernelParams2 params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+)
+{
+	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+	
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+	
+	if(pixel.x >= w || pixel.y >= h)
+		return;
+
+	// Linear pixel index
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
+
+	// Noise-free estimate of the color (computed via a weighted sum of features)
+	vec3 filtered_color = load_float3(filtered_frame, linear_pixel);
+	store_float3(accumulated_frame, linear_pixel, filtered_color);
+
+	// Remodulate albedo and tone map
+	vec3 albedo = load_float3(albedo_buffer, linear_pixel);
+	const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * filtered_color), 0.454545f), vec3(0.f), vec3(1.f));
+	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+}
+
+extern "C" void run_accumulate_filtered_data_frame0(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams2 const & params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+)
+{
+	accumulate_filtered_data_frame0<<<grid_size, block_size>>>(
+		params,
+		filtered_frame,
+		albedo_buffer,
+		tone_mapped_frame,
+		accumulated_frame
+	);
+}
+
+
+__global__ void new_accumulate_filtered_data(
+	AccumulateFilteredDataKernelParams2 params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+)
+{
+	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+	
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+	
+	if(pixel.x >= w || pixel.y >= h)
+		return;
+
+	// Linear pixel index
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
+
+	// Noise-free estimate of the color (computed via a weighted sum of features)
+	vec3 filtered_color = load_float3(filtered_frame, linear_pixel);
+	vec3 prev_color = vec3(0.f, 0.f, 0.f);
+	float blend_alpha = 1.f;
+
+	// Reproject and accumulate previous frame noise-free estimate
+
+	// Bitmask telling which bilinear samples were accepted in the first accumulation kernel
+	const unsigned char accept = accept_bools[linear_pixel];
+
+	if(accept > 0) // If any prev frame sample is accepted
+	{
+		// Pixel coordinates in the previous frame (in [0, w-1]x[0, h-1])
+		const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+			
+		// Integer pixel coordinates in the previous frame
+		const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
+
+		// Compute bilinear weights for bilinear sampling
+		const vec2 prev_pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+		const vec2 one_minus_prev_pixel_fract = 1.f - prev_pixel_fract;
+
+		float total_weight = 0.f;
+
+		// Add valid bilinear samples
+
+		if(accept & 0x01)
+		{
+			float weight = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
+			int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x;
+			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			total_weight += weight;
+		}
+
+		if(accept & 0x02)
+		{
+			float weight = prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
+			int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1;
+			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			total_weight += weight;
+		}
+
+		if(accept & 0x04)
+		{
+			float weight = one_minus_prev_pixel_fract.x * prev_pixel_fract.y;
+			int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x;
+			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			total_weight += weight;
+		}
+
+		if(accept & 0x08)
+		{
+			float weight = prev_pixel_fract.x * prev_pixel_fract.y;
+			int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1;
+			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			total_weight += weight;
+		}
+
+		if(total_weight > 0.f)
+		{
+			// Blend_alpha is dymically decided so that the result is average
+			// of all samples (cumulative moving average) until the cap defined by
+			// SECOND_BLEND_ALPHA is reached (exponential moving average: EMA_(n+1) = (1 - a) * EMA_n + a * x_(n+1) = lerp(EMA_n, x_(n+1), a))
+
+			// [Section 3.5]
+			// Similarly to the first temporal accumulation we use the cumulative moving average until
+			// the weight of the new sample has reached the chosen SECOND_BLEND_ALPHA (e.g 10%).
+			// Using the cumulative moving average in this second temporal accumulation is crucial since
+			// the first block fitted after an occlusion is more likely to contain outlier data and with
+			// the cumulative moving average it is mixed with subsequent frames more quickly.
+			blend_alpha = 1.f / float(current_spp[linear_pixel]);
+			blend_alpha = Max(blend_alpha, SECOND_BLEND_ALPHA);
+			prev_color /= total_weight;
+
+			// Note: we accumulate at most 255 samples for the cumulative moving average (which is more than enough because of
+			// the threshold SECOND_BLEND_ALPHA that switch to exponential moving average).
+			// E.g: SECOND_BLEND_ALPHA = 0.1 = 1 / (n + 1) <=> n = (1 - 0.1) / 0.1 = 9 => above 9 samples for a pixel,
+			// we switch to exponential moving average with alpha = 10%
+		}
+	}
+
+	// Mix with colors and store results
+	vec3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
+	store_float3(accumulated_frame, linear_pixel, accumulated_color);
+
+	// Remodulate albedo and tone map
+	vec3 albedo = load_float3(albedo_buffer, linear_pixel);
+	const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * accumulated_color), 0.454545f), vec3(0.f), vec3(1.f));
+	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+}
+
+extern "C" void run_new_accumulate_filtered_data(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	AccumulateFilteredDataKernelParams2 const & params,
+	const float * K_RESTRICT filtered_frame,			// [in]  Noise free color estimate (computed as the weighted sum of the features)
+	const vec2 * K_RESTRICT in_prev_frame_pixel,		// [in]  Previous frame pixel coordinates (after reprojection)
+	const unsigned char * K_RESTRICT accept_bools,		// [in]  Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT albedo_buffer,				// [in]  Albedo buffer of the current frame (non-noisy)
+		  float * K_RESTRICT tone_mapped_frame,			// [out] Accumulated and tonemapped noise-free color estimate
+	const unsigned char* K_RESTRICT current_spp,		// [in]	 Current number of samples accumulated (for CMA)
+	const float * K_RESTRICT accumulated_prev_frame,	// [in]  Previous frame noise-free accumulated color estimate 
+		  float * K_RESTRICT accumulated_frame			// [out] Current frame noise-free accumulated color estimate
+)
+{
+	new_accumulate_filtered_data<<<grid_size, block_size>>>(
+		params,
+		filtered_frame,
+		in_prev_frame_pixel,
+		accept_bools,
+		albedo_buffer,
+		tone_mapped_frame,
+		current_spp,
+		accumulated_prev_frame,
+		accumulated_frame
+	);
+}
+
+
+// TAA kernel //////////////////////////////////////////////////////////////////
+
+// TODO:
+// - optimize with local/shared memory
+__global__ void taa_frame0(
+	TAAKernelParams params,
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame			// [out] Antialiased frame color buffer
+)
+{
+	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+   
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
+	if(pixel.x >= w || pixel.y >= h)
+		return;
+
+	// Linear pixel index
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
+
+	store_float3(result_frame, linear_pixel, load_float3(new_frame, linear_pixel));
+}
+
+extern "C" void run_taa_frame0(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	TAAKernelParams const & params,
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame			// [out] Antialiased frame color buffer
+)
+{
+	taa_frame0<<<grid_size, block_size>>>(params, new_frame, result_frame);
+}
+
+
+__global__ void new_taa(
+	TAAKernelParams params,
+	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
+)
+{
+	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+   
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
+	if(pixel.x >= w || pixel.y >= h)
+		return;
+
+	// Linear pixel index
+	const unsigned int linear_pixel = pixel.y * w + pixel.x;
+
+	// Current frame color
+	vec3 my_new_color = load_float3(new_frame, linear_pixel);
+
+	// Previous frame pixel coordinates
+	const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
+	const ivec2 prev_frame_pixel_i = FloatToIntRd(prev_frame_pixel_f);
+
+	// Return if all sampled pixels are going to be out of image area
+	if(prev_frame_pixel_i.x < -1 || prev_frame_pixel_i.y < -1 ||
+	   prev_frame_pixel_i.x >= w || prev_frame_pixel_i.y >= h
+	)
+	{
+		store_float3(result_frame, linear_pixel, my_new_color);
+		return;
+	}
+
+	// Compute the color AABB in the 3x3 neighbourhood and the min/max in a cross pattern around the current pixel
+	vec3 minimum_box	= vec3(+C_FLT_MAX);
+	vec3 minimum_cross	= vec3(+C_FLT_MAX);
+	vec3 maximum_box	= vec3(-C_FLT_MAX);
+	vec3 maximum_cross	= vec3(-C_FLT_MAX);
+	for(int y = -1; y <= 1; ++y)
+	{
+		for(int x = -1; x <= 1; ++x)
+		{
+			ivec2 sample_location = pixel + ivec2(x, y);
+			if(sample_location.x >= 0 && sample_location.y >= 0 &&
+			   sample_location.x < w && sample_location.y < h
+			)
+			{
+				vec3 sample_color;
+				if(x == 0 && y == 0)
+					sample_color = my_new_color;
+				else
+					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * w);
+
+				sample_color = RGB_to_YCoCg(sample_color);
+
+				if(x == 0 || y == 0)
+				{
+					minimum_cross = Min(minimum_cross, sample_color);
+					maximum_cross = Max(maximum_cross, sample_color);
+				}
+
+				minimum_box = Min(minimum_box, sample_color);
+				maximum_box = Max(maximum_box, sample_color);
+			}
+		}
+	}
+
+	// Bilinear sampling of previous frame.
+	// Note: work-item has already returned if the sampling location is completly out of image
+	vec3 prev_color = vec3(0.f, 0.f, 0.f);
+	float total_weight = 0;
+	const vec2 pixel_fract = prev_frame_pixel_f - vec2(prev_frame_pixel_i);
+	const vec2 one_minus_pixel_fract = 1.f - pixel_fract;
+
+	if(prev_frame_pixel_i.y >= 0)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
+
+		if(prev_frame_pixel_i.x < w - 1)
+		{
+			float weight = pixel_fract.x * one_minus_pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
+
+	if(prev_frame_pixel_i.y < h - 1)
+	{
+		if(prev_frame_pixel_i.x >= 0)
+		{
+			float weight = one_minus_pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x);
+			total_weight += weight;
+		}
+
+		if(prev_frame_pixel_i.x < w - 1)
+		{
+			float weight = pixel_fract.x * pixel_fract.y;
+			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1);
+			total_weight += weight;
+		}
+	}
+
+	if(total_weight > 0)
+		prev_color /= total_weight; // Total weight can be less than one on the edges
+
+	vec3 prev_color_ycocg = RGB_to_YCoCg(prev_color);
+
+	// Note: Some references use more complicated methods to move the previous frame color to the YCoCg space AABB
+	vec3 minimum = (minimum_box + minimum_cross) / 2.f;
+	vec3 maximum = (maximum_box + maximum_cross) / 2.f;
+	vec3 prev_color_rgb = YCoCg_to_RGB(Clamp(prev_color_ycocg, minimum, maximum));
+
+	vec3 result_color = TAA_BLEND_ALPHA * my_new_color + (1.f - TAA_BLEND_ALPHA) * prev_color_rgb; // Lerp(prev_color_rgb, my_new_color, TAA_BLEND_ALPHA);
+	store_float3(result_frame, linear_pixel, result_color);
+}
+
+extern "C" void run_new_taa(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	TAAKernelParams const & params,
+	const vec2 * K_RESTRICT in_prev_frame_pixel,	// [in]  Previous frame pixel coordinates (after reprojection)
+	const float * K_RESTRICT new_frame,				// [in]	 Current frame color buffer
+		  float * K_RESTRICT result_frame,			// [out] Antialiased frame color buffer
+	const float * K_RESTRICT prev_frame				// [in]  Previous frame color buffer
+)
+{
+	new_taa<<<grid_size, block_size>>>(
+		params,
+		in_prev_frame_pixel,
+		new_frame,
+		result_frame,
+		prev_frame
+	);
+}

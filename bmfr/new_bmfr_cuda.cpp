@@ -384,25 +384,39 @@ int new_bmfr_cuda(TmpData & tmpData)
 			k_block_size.y
 		);
 
-		AccumulateFilteredDataKernelParams accFilteredDataParams;
+		AccumulateFilteredDataKernelParams2 accFilteredDataParams;
 		accFilteredDataParams.sizeX = w;
 		accFilteredDataParams.sizeY = h;
-		accFilteredDataParams.frameNumber = frame;
 
 		accumulate_noisefree_estimate_timers[frame].start();
-		run_accumulate_filtered_data(
-			k_workset_grid_size,
-			k_block_size,
-			accFilteredDataParams,
-			buffers.noisefree_1spp.getTypedData<float>(),
-			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
-			buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
-			buffers.albedo_buffer.getTypedData<float>(),
-			buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
-			buffers.spp_buffer.current().getTypedData<unsigned char>(),
-			buffers.noisefree_1spp_accumulated.previous().getTypedData<float>(), 
-			buffers.noisefree_1spp_accumulated.current().getTypedData<float>()
-		);
+		if(frame == 0)
+		{
+			run_accumulate_filtered_data_frame0(
+				k_workset_grid_size,
+				k_block_size,
+				accFilteredDataParams,
+				buffers.noisefree_1spp.getTypedData<float>(),
+				buffers.albedo_buffer.getTypedData<float>(),
+				buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+				buffers.noisefree_1spp_accumulated.current().getTypedData<float>()
+			);
+		}
+		else
+		{
+			run_new_accumulate_filtered_data(
+				k_workset_grid_size,
+				k_block_size,
+				accFilteredDataParams,
+				buffers.noisefree_1spp.getTypedData<float>(),
+				buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+				buffers.prev_frame_bilinear_samples_validity_mask.getTypedData<unsigned char>(),
+				buffers.albedo_buffer.getTypedData<float>(),
+				buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+				buffers.spp_buffer.current().getTypedData<unsigned char>(),
+				buffers.noisefree_1spp_accumulated.previous().getTypedData<float>(), 
+				buffers.noisefree_1spp_accumulated.current().getTypedData<float>()
+			);
+		}
 		accumulate_noisefree_estimate_timers[frame].stop();
 
 		#if SAVE_INTERMEDIARY_BUFFERS
@@ -424,15 +438,28 @@ int new_bmfr_cuda(TmpData & tmpData)
 		taaParams.frameNumber = frame;
 
 		taa_timers[frame].start();
-		run_taa(
-			k_workset_grid_size,
-			k_block_size,
-			taaParams,
-			buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
-			buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
-			buffers.result_buffer.current().getTypedData<float>(),
-			buffers.result_buffer.previous().getTypedData<float>()
-		);
+		if(frame == 0)
+		{
+			run_taa_frame0(
+				k_workset_grid_size,
+				k_block_size,
+				taaParams,
+				buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+				buffers.result_buffer.current().getTypedData<float>()
+			);
+		}
+		else
+		{
+			run_new_taa(
+				k_workset_grid_size,
+				k_block_size,
+				taaParams,
+				buffers.prev_frame_pixel_coords_buffer.getTypedData<vec2>(),
+				buffers.noisefree_1spp_acc_tonemapped.getTypedData<float>(),
+				buffers.result_buffer.current().getTypedData<float>(),
+				buffers.result_buffer.previous().getTypedData<float>()
+			);
+		}
 		taa_timers[frame].stop();
 		frame_timers[frame].stop();
 
