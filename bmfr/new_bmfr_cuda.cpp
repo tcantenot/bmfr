@@ -123,28 +123,6 @@ int new_bmfr_cuda(TmpData & tmpData)
 	// + 3 stands for three noisy spp color channels.
 	const auto buffer_count = features_not_scaled_count + features_scaled_count + 3;
 
-	#if COMPRESSED_R
-	// TODO: replace 'buffer_count-2'
-	// Explanations: The number of features M is buffer_count - 3 because buffer_count comprises the 3 noisy 1spp color channels inputs.
-	// To this we add 1 because we concatenate z(c) which is the c channel of the noisy path-traced input with makes a size of 'buffer_count-2'.
-	// "The Householder QR factorization yields an (M + 1)x(M + 1) upper triangular matrix R(c)"
-	// See section 3.3 and 3.4.
-
-	// Computed via sum of arithmetic sequence (that for the upper right triangle):
-	//    0  1  2  3  4  5 x
-	// 0 00 01 02 03 04 05
-	// 1  - 11 12 13 14 15
-	// 2  -  - 22 23 24 25
-	// 3  -  -  - 33 34 35
-	// 4  -  -  -  - 44 45
-	// 5  -  -  -  -  - 55
-	// y
-	// (1 + 2 + ... + buffer_count - 2) = (buffer_count-2+1)*(buffer_count-2)/2 = (buffer_count-1)*(buffer_count-2)/2
-    const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(vec3);
-	#else
-    const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(vec3);
-	#endif
-
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
 	
