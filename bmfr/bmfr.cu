@@ -571,7 +571,7 @@ __global__ void fitter(
 					float store_value = tmp_data_private_cache[subVector];
 					#else
 					float store_value = load_feature(features_buffer, featureOffset);
-					const int seed = sub_vector * LOCAL_SIZE + baseFeatureSeed;
+					const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
 					store_value += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
 					#endif
 					store_value -= dotFactor * u_vec[index];
