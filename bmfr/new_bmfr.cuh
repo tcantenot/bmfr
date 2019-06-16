@@ -77,6 +77,15 @@ extern "C" void run_new_fitter(
 	#endif
 );
 
+extern "C" void run_fitter16bits(
+	dim3 const & grid_size,
+	dim3 const & block_size,
+	FitterKernelParams params,
+	//half * K_RESTRICT weights,			// [out] Features weights
+	float * K_RESTRICT weights,			// [out] Features weights
+	half * K_RESTRICT features_buffer	// [in]  Features buffer
+);
+
 // Weighted sum kernel /////////////////////////////////////////////////////////
 // -> outputs the noise-free 1spp color estimate
 

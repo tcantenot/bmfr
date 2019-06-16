@@ -304,6 +304,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		fitterParams.frameNumber = frame;
 
 		fitter_timers[frame].start();
+		#if 1
 		run_new_fitter(
 			k_fitter_grid_size,
 			k_fitter_block_size,
@@ -315,6 +316,15 @@ int new_bmfr_cuda(TmpData & tmpData)
 			buffers.features_buffer.getTypedData<float>()
 			#endif
 		);
+		#else
+		run_fitter16bits(
+			k_fitter_grid_size,
+			k_fitter_block_size,
+			fitterParams,
+			buffers.features_weights_buffer.getTypedData<float>(),
+			buffers.features_buffer.getTypedData<half>()
+		);
+		#endif
 		fitter_timers[frame].stop();
 
 		//K_CUDA_CHECK(cudaDeviceSynchronize());
