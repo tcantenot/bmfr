@@ -24,12 +24,16 @@ void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h
 	cudaBufferTotalSize += 2 * normals_buffer_size;
 
 	// World positions buffer (3 * float32)
-	// TODO: normalize in [0, 1] (or [-1, +1])
 	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
 	const size_t positions_buffer_size = positionsBufferDesc.byte_size;
     buffers.positions_buffer[0].init(positions_buffer_size);
     buffers.positions_buffer[1].init(positions_buffer_size);
 	cudaBufferTotalSize += 2 * positions_buffer_size;
+
+	// Normalized world positions buffer (3 * float32)
+	const size_t normalized_positions_buffer_size = positionsBufferDesc.byte_size;
+	buffers.normalized_positions_buffer.init(positions_buffer_size);
+	cudaBufferTotalSize += normalized_positions_buffer_size;
 
 	// Frame noisy 1spp color buffer (3 * float32)
 	const BufferDesc noisy1sppBufferDesc = GetNoisy1sppBufferDesc(w, h);
@@ -125,7 +129,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
-	
+
 	const size_t localWidth					= GetLocalWidth();
 	const size_t localHeight				= GetLocalHeight();
 	const size_t worksetWidth				= ComputeWorksetWidth(w);
@@ -135,7 +139,6 @@ int new_bmfr_cuda(TmpData & tmpData)
 	const size_t fitterLocalSize			= GetFitterLocalSize();
 	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
 
-	const BufferDesc positionsBufferDesc = GetPositionsBufferDesc(w, h);
 
 	// Create CUDA buffers
 
@@ -161,6 +164,12 @@ int new_bmfr_cuda(TmpData & tmpData)
 	std::vector<CudaTimer> weighted_sum_timers(FRAME_COUNT);
 	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
 	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
+
+	const dim3 k_rescale_world_pos_block_size(32, 32);
+	const dim3 k_rescale_world_pos_grid_size(
+		(worksetWidthWithMargin  + k_rescale_world_pos_block_size.x - 1) / k_rescale_world_pos_block_size.x,
+		(worksetHeightWithMargin + k_rescale_world_pos_block_size.y - 1) / k_rescale_world_pos_block_size.y
+	);
 
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
@@ -195,12 +204,20 @@ int new_bmfr_cuda(TmpData & tmpData)
 		);
 
 		rescale_features_timers[frame].start();
-		run_rescale_features(
-			k_workset_grid_size,
-			k_block_size,
+
+		RescaleFeaturesParams rescaleWorldPosParams;
+		rescaleWorldPosParams.sizeX = w;
+		rescaleWorldPosParams.sizeY = h;
+		rescaleWorldPosParams.frameNumber = frame;
+
+		run_rescale_world_positions_pr(
+			k_rescale_world_pos_grid_size,
+			k_rescale_world_pos_block_size,
+			rescaleWorldPosParams,
 			buffers.positions_buffer.current().getTypedData<float>(),
-			positionsBufferDesc.w *	positionsBufferDesc.h * 3
+			buffers.normalized_positions_buffer.getTypedData<float>()
 		);
+
 		rescale_features_timers[frame].stop();
 
 		// Phase I:
@@ -232,7 +249,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 				k_block_size,
 				accNoisyDataParams,
 				buffers.normals_buffer.current().getTypedData<float>(),
-				buffers.positions_buffer.current().getTypedData<float>(),
+				buffers.normalized_positions_buffer.getTypedData<float>(),
 				buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
 				buffers.noisy_1spp_buffer.current().getTypedData<float>(),
 				buffers.spp_buffer.current().getTypedData<unsigned char>(),
@@ -258,6 +275,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 				buffers.normals_buffer.previous().getTypedData<float>(),
 				buffers.positions_buffer.current().getTypedData<float>(),
 				buffers.positions_buffer.previous().getTypedData<float>(),
+				buffers.normalized_positions_buffer.getTypedData<float>(),
 				buffers.frame_noisy_1spp_buffer.getTypedData<float>(),
 				buffers.noisy_1spp_buffer.current().getTypedData<float>(),
 				buffers.noisy_1spp_buffer.previous().getTypedData<float>(),
@@ -352,7 +370,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 			buffers.features_weights_buffer.getTypedData<float>(),
 			buffers.noisefree_1spp.getTypedData<float>(),
 			buffers.normals_buffer.current().getTypedData<float>(),
-			buffers.positions_buffer.current().getTypedData<float>()
+			buffers.normalized_positions_buffer.getTypedData<float>()
 		);
 		weighted_sum_timers[frame].stop();
 

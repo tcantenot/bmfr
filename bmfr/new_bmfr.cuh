@@ -14,11 +14,19 @@ struct BMFRFrameData
 
 // Rescale features ////////////////////////////////////////////////////////////
 
-extern "C" void run_rescale_features(
+struct RescaleFeaturesParams
+{
+	unsigned int sizeX;
+	unsigned int sizeY;
+	unsigned int frameNumber;
+};
+
+extern "C" void run_rescale_world_positions_pr(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	float * features,
-	unsigned int n
+	RescaleFeaturesParams const & params,
+	float const * world_positions,
+	float * normalized_world_positions
 );
 
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
@@ -27,15 +35,15 @@ extern "C" void run_accumulate_noisy_data_frame0(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	AccumulateNoisyDataKernelParams params,
-	const float * K_RESTRICT frame_normals,				// [in]  Frame (world) normals
-	const float * K_RESTRICT frame_positions,			// [in]  Frame world positions
-	const float * K_RESTRICT frame_noisy_1spp,			// [in]  Frame noisy 1spp color buffer
-		  float * K_RESTRICT frame_acc_noisy,			// [out] Accumulated noisy color
-		  unsigned char * K_RESTRICT frame_acc_num_spp,	// [out] Accumulated number of samples (for CMA)
+	const float * K_RESTRICT frame_normals,					// [in]  Frame (world) normals
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
+		  float * K_RESTRICT frame_acc_noisy,				// [out] Accumulated noisy color
+		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Accumulated number of samples (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data						// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_data							// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_data					// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_data						// [out] Features buffer (single-precision)
 	#endif
 );
 
@@ -49,6 +57,7 @@ extern "C" void run_new_accumulate_noisy_data(
 	const float * K_RESTRICT prev_frame_normals,			// [in]  Previous (world) normals
 	const float * K_RESTRICT frame_positions,				// [in]  Current  world positions
 	const float * K_RESTRICT prev_frame_positions,			// [in]  Previous world positions
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
 	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
 		  float * K_RESTRICT frame_acc_noisy,				// [out] Current  noisy 1spp color
 	const float * K_RESTRICT prev_frame_acc_noisy,			// [in]  Previous noisy 1spp color

@@ -150,14 +150,20 @@ template <typename T>
 inline __device__ T Dot(tvec3<T> const & lhs, tvec3<T> const & rhs) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z; }
 
 template <typename T>
-struct tvec4
+struct tcvec4
 {
 	T x, y, z, w;
+};
 
-	__device__ explicit tvec4(T v = T(0)): x(v), y(v), z(v), w(v) { }
-	__device__ tvec4(T xx, T yy, T zz, T ww): x(xx), y(yy), z(zz), w(ww) { }
-	__device__ tvec4(tvec3<T> const & v, T ww): x(v.x), y(v.y), z(v.z), w(ww) { }
-	__device__ tvec4(tvec4 const & v): x(v.x), y(v.y), z(v.z), w(v.w) { }
+using cvec4 = tcvec4<float>;
+
+template <typename T>
+struct tvec4 : public tcvec4<T>
+{
+	__device__ explicit tvec4(T v = T(0)) { x = v; y = v; z = v; w = v; }
+	__device__ tvec4(T xx, T yy, T zz, T ww) { x = xx; y = yy; z = zz; w = ww; }
+	__device__ tvec4(tvec3<T> const & v, T ww) { x = v.x; y = v.y; z = v.z; w = ww; }
+	__device__ tvec4(tcvec4<T> const & o) { x = o.x; y = o.y; z = o.z; w = o.w; }
 	__device__ tvec4 operator+(tvec4 const & o) const { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
 	__device__ tvec4 operator-(tvec4 const & o) const { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
 
@@ -513,7 +519,6 @@ inline __device__ ivec2 mirror2(ivec2 index, ivec2 size)
 
 // Conversion functions ////////////////////////////////////////////////////////
 
-#if USE_HALF_PRECISION_IN_FEATURES_DATA
 inline __device__ half FloatToHalf(float x)
 {
 	return __float2half(x);
@@ -523,7 +528,6 @@ inline __device__ float HalfToFloat(half x)
 {
 	return __half2float(x);
 }
-#endif
 
 inline __device__ int FloatToIntRd(float x)
 {
@@ -562,7 +566,7 @@ inline __device__ vec3 load_float3(float const * K_RESTRICT buffer, unsigned int
 	#endif
 }	
 
-inline __device__ void store_float3(float * K_RESTRICT buffer, unsigned int  index, vec3 value)
+inline __device__ void store_float3(float * K_RESTRICT buffer, unsigned int  index, vec3 const & value)
 {
 	#if OPTIMIZE_LOAD_STORE
 	*reinterpret_cast<vec3 *>(buffer + index * 3) = value;

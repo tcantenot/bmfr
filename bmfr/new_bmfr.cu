@@ -173,35 +173,188 @@ struct tvec3<half> : public tcvec3<half>
 	__device__ tvec3 const & operator/=(half v) { half vv[3] = { v, v, v }; Div3(&x, vv, &x); return *this; }
 };
 
+template <>
+struct tvec4<half> : public tcvec4<half>
+{
+	__device__ tvec3<half> xyz() const { return tvec3<half>(x, y, z); }
+};
+
 using vec3h = tvec3<half>;
+using vec4h = tvec4<half>;
 
-
-inline __device__ vec3h load_half3(half const * K_RESTRICT buffer, unsigned int index)
+inline __device__ half Lerp(half a, half b, half t)
 {
-	return vec3h(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+	#if K_SUPPORT_HALF16_ARITHMETIC
+	half one_minus_t = __hsub(__float2half(1.0f), t);
+	half2 partial_sums = __hmul2(__halves2half2(one_minus_t, t), __halves2half2(a, b));
+	return __hadd(__low2half(partial_sums), __high2half(partial_sums));
+	#else
+	float ft = __half2float(t);
+	float fa = __half2float(a);
+	float fb = __half2float(b);
+	return __float2half((1.0f - ft) * fa + ft * fb);
+	#endif
 }
 
-inline __device__ void store_half3(half * K_RESTRICT buffer, unsigned int index, vec3h value)
+// TODO: benchmark
+inline __device__ vec3h Lerp(vec3h const & a, vec3h const & b, vec3h const & t)
 {
-	*reinterpret_cast<vec3h *>(buffer + index * 3) = value;
+	#if 0
+	half h1 = __float2half(1.0f);
+
+	half2 one_minus_t_xy = __hsub2(__halves2half2(h1, t.x), __halves2half2(h1, t.y));
+	half2 lhs_xy = __hmul2(one_minus_t_xy, __halves2half2(a.x, a.y));
+	half2 rhs_xy = __hmul2(__halves2half2(t.x, t.y), __halves2half2(b.x, b.y));
+	half2 res_xy = __hadd2(lhs_xy, rhs_xy);
+
+	half one_minus_t_z = __hsub(h1, t.z);
+	half2 partial_sums_z = __hmul2(__halves2half2(one_minus_t_z, t.z), __halves2half2(a.z, b.z));
+	half res_z = __hadd(__low2half(partial_sums_z), __high2half(partial_sums_z));
+
+	return vec3h(__low2half(res_xy), __high2half(res_xy), res_z);
+	#else
+	return vec3h(Lerp(a.x, b.x, t.x), Lerp(a.y, b.y, t.y), Lerp(a.z, b.z, t.z));
+	#endif
+}
+
+// TODO: benchmark
+inline __device__ vec3h Lerp(vec3h const & a, vec3h const & b, half t)
+{
+	#if 0
+	half one_minus_t = __hsub(__float2half(1.0f), t);
+
+	half2 lhs_xy = __hmul2(__halves2half2(one_minus_t, one_minus_t), __halves2half2(a.x, a.y));
+	half2 rhs_xy = __hmul2(__halves2half2(t, t), __halves2half2(b.x, b.y));
+	half2 res_xy = __hadd2(lhs_xy, rhs_xy);
+
+	half2 partial_sums_z = __hmul2(__halves2half2(one_minus_t, t), __halves2half2(a.z, b.z));
+	half res_z = __hadd(__low2half(partial_sums_z), __high2half(partial_sums_z));
+
+	return vec3h(__low2half(res_xy), __high2half(res_xy), res_z);
+	#else
+	return vec3h(Lerp(a.x, b.x, t), Lerp(a.y, b.y, t), Lerp(a.z, b.z, t));
+	#endif
+}
+
+
+template <typename In, typename Out>
+struct LoadStoreHelper;
+
+template <>
+struct LoadStoreHelper<float, float>
+{
+	static inline __device__ vec3 load3(float const * K_RESTRICT buffer, unsigned int index)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		return (*reinterpret_cast<vec4 const *>(buffer + index * 3)).xyz();
+		#else
+		return vec3(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+		#endif
+	}
+
+	static inline __device__ void store3(float * K_RESTRICT buffer, unsigned int index, vec3 const & value)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		*reinterpret_cast<vec3 *>(buffer + index * 3) = value;
+		#else
+		buffer[index * 3 + 0] = value.x;
+		buffer[index * 3 + 1] = value.y;
+		buffer[index * 3 + 2] = value.z;
+		#endif
+	}
+};
+
+template <>
+struct LoadStoreHelper<half, half>
+{
+	static inline __device__ vec3h load3(half const * K_RESTRICT buffer, unsigned int index)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		return (*reinterpret_cast<vec4h const *>(buffer + index * 3)).xyz();
+		#else
+		return vec3h(buffer[index * 3 + 0], buffer[index * 3 + 1], buffer[index * 3 + 2]);
+		#endif
+	}
+
+	static inline __device__ void store3(half * K_RESTRICT buffer, unsigned int index, vec3h const & value)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		*reinterpret_cast<vec3h *>(buffer + index * 3) = value;
+		#else
+		buffer[index * 3 + 0] = value.x;
+		buffer[index * 3 + 1] = value.y;
+		buffer[index * 3 + 2] = value.z;
+		#endif
+	}
+};
+
+template <>
+struct LoadStoreHelper<float, half>
+{
+	static inline __device__ vec3h load3(float const * K_RESTRICT buffer, unsigned int index)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		vec4 const * v = reinterpret_cast<vec4 const *>(buffer + index * 3);
+		return vec3h(__float2half(v->x), __float2half(v->y), __float2half(v->z));
+		#else
+		return vec3h(__float2half(buffer[index * 3 + 0]),__float2half(buffer[index * 3 + 1]), __float2half(buffer[index * 3 + 2]));
+		#endif
+	}
+
+	static inline __device__ void store3(half * K_RESTRICT buffer, unsigned int index, vec3 const & value)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		vec3h * v = reinterpret_cast<vec3h *>(buffer + index * 3);
+		v->x = __float2half(value.x);
+		v->y = __float2half(value.y);
+		v->z = __float2half(value.z);
+		#else
+		buffer[index * 3 + 0] = __float2half(value.x);
+		buffer[index * 3 + 1] = __float2half(value.y);
+		buffer[index * 3 + 2] = __float2half(value.z);
+		#endif
+	}
+};
+
+template <>
+struct LoadStoreHelper<half, float>
+{
+	static inline __device__ vec3 load3(half const * K_RESTRICT buffer, unsigned int index)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		vec4h const * v = reinterpret_cast<vec4h const *>(buffer + index * 3);
+		return vec3(__half2float(v->x), __half2float(v->y), __half2float(v->z));
+		#else
+		return vec3(__half2float(buffer[index * 3 + 0]),__half2float(buffer[index * 3 + 1]), __half2float(buffer[index * 3 + 2]));
+		#endif
+	}
+
+	static inline __device__ void store3(float * K_RESTRICT buffer, unsigned int index, vec3h const & value)
+	{
+		#if OPTIMIZE_LOAD_STORE
+		vec3 * v = reinterpret_cast<vec3 *>(buffer + index * 3);
+		v->x = __half2float(value.x);
+		v->y = __half2float(value.y);
+		v->z = __half2float(value.z);
+		#else
+		buffer[index * 3 + 0] = __half2float(value.x);
+		buffer[index * 3 + 1] = __half2float(value.y);
+		buffer[index * 3 + 2] = __half2float(value.z);
+		#endif
+	}
+};
+
+
+template <typename Out, typename In>
+inline __device__ tvec3<Out> load3(In const * K_RESTRICT buffer, unsigned int index)
+{
+	return LoadStoreHelper<In, Out>::load3(buffer, index);
 }
 
 template <typename Out, typename In>
-inline __device__ tvec3<Out> load(In const * K_RESTRICT buffer, unsigned int index)
+inline __device__ void store3(Out * K_RESTRICT buffer, unsigned int index, tvec3<In> const & value)
 {
-	return tvec3<Out>(
-		Converter<Out>::Convert(buffer[index * 3 + 0]),
-		Converter<Out>::Convert(buffer[index * 3 + 1]),
-		Converter<Out>::Convert(buffer[index * 3 + 2])
-	);
-}
-
-template <typename Out, typename In>
-inline __device__ void store(Out * K_RESTRICT buffer, unsigned int index, tvec3<In> value)
-{
-	buffer[index * 3 + 0] = Converter<Out>::Convert(value.x);
-	buffer[index * 3 + 1] = Converter<Out>::Convert(value.y);
-	buffer[index * 3 + 2] = Converter<Out>::Convert(value.z);
+	LoadStoreHelper<In, Out>::store3(buffer, index, value);
 }
 
 inline __device__ void store_feature(half * buffer, unsigned int index, half value)
@@ -211,12 +364,11 @@ inline __device__ void store_feature(half * buffer, unsigned int index, half val
 
 // Compute features ////////////////////////////////////////////////////////////
 
-template <typename T, typename U, typename V, typename FeatureType>
-inline __device__ void compute_features(
+template <typename T, typename U, typename FeatureType>
+inline __device__ void compute_features_without_color(
 	tvec3<T> const & world_position,
 	tvec3<U> const & normal,
-	tvec3<V> const & noisy_1spp_color,
-	FeatureType features[BUFFER_COUNT]
+	FeatureType * features
 )
 {
 	features[0]  = Converter<FeatureType>::Convert(1.0f);
@@ -229,6 +381,17 @@ inline __device__ void compute_features(
 	features[7]  = Converter<FeatureType>::Convert(Mul(world_position.x, world_position.x));
 	features[8]  = Converter<FeatureType>::Convert(Mul(world_position.y, world_position.y));
 	features[9]  = Converter<FeatureType>::Convert(Mul(world_position.z, world_position.z));
+}
+
+template <typename T, typename U, typename V, typename FeatureType>
+inline __device__ void compute_features(
+	tvec3<T> const & world_position,
+	tvec3<U> const & normal,
+	tvec3<V> const & noisy_1spp_color,
+	FeatureType features[BUFFER_COUNT]
+)
+{
+	compute_features_without_color(world_position, normal, features);
 	features[10] = Converter<FeatureType>::Convert(noisy_1spp_color.x);
 	features[11] = Converter<FeatureType>::Convert(noisy_1spp_color.y);
 	features[12] = Converter<FeatureType>::Convert(noisy_1spp_color.z);
@@ -236,28 +399,137 @@ inline __device__ void compute_features(
 
 // Rescale features ////////////////////////////////////////////////////////////
 
-__global__ void rescale_features(float * features, unsigned int n)
+inline __device__ void parallel_reduction_min_1024(
+	float * K_RESTRICT result,
+	float * K_RESTRICT pr_data_1024,
+	const unsigned int index
+)
 {
-	// TODO: optimize
-	// - 128-bit loads
-	// - grid-stride loop
-	const unsigned int gtid = blockIdx.x * blockDim.x + threadIdx.x;
-
-	if(gtid < n)
+	if(index < 256)
 	{
-		float x = features[gtid];
-		features[gtid] = x / (x + 1.0f);
+		pr_data_1024[index] = Min(
+			Min(pr_data_1024[index], pr_data_1024[index + 256]),
+			Min(pr_data_1024[index + 512], pr_data_1024[index + 768])
+		);
+	}
+
+	SyncThreads();
+
+	parallel_reduction_min_256(result, pr_data_1024);
+}
+
+inline __device__ void parallel_reduction_max_1024(
+	float * K_RESTRICT result,
+	float * K_RESTRICT pr_data_1024,
+	const unsigned int index
+)
+{
+	if(index < 256)
+	{
+		pr_data_1024[index] = Max(
+			Max(pr_data_1024[index], pr_data_1024[index + 256]),
+			Max(pr_data_1024[index + 512], pr_data_1024[index + 768])
+		);
+	}
+
+	SyncThreads();
+
+	parallel_reduction_max_256(result, pr_data_1024);
+}
+
+inline __device__ void parallel_reduction_sum_1024(
+	float * K_RESTRICT result,
+	float * K_RESTRICT pr_data_1024,
+	const unsigned int index
+)
+{
+	if(index < 256)
+		pr_data_1024[index] += pr_data_1024[index + 256] + pr_data_1024[index + 512] + pr_data_1024[index + 768];
+	SyncThreads();
+
+	parallel_reduction_sum_256(result, pr_data_1024, 0);
+}
+
+__global__ void rescale_world_positions_pr(
+	RescaleFeaturesParams params,
+	float const * world_positions,
+	float * normalized_world_positions
+)
+{
+	__shared__ float lds[1024];
+	__shared__ float block_min;
+	__shared__ float block_max;
+
+	const ivec2 gtid = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+
+	const int w = params.sizeX;
+	const int h = params.sizeY;
+
+	// Mirror indexed of the input. x and y are always less than one size out of
+	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
+	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
+	const ivec2 pixel_without_mirror = gtid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+
+	// Pixel coordinates in [0, w-1]x[0, h-1]
+	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
+
+	// Linear pixel index in image in [0, w*h-1]
+	const int linear_pixel = pixel.y * w + pixel.x;
+
+	// Current frame world position
+	const vec3 v = load3<float>(world_positions, linear_pixel);
+
+	// Note: assume group of size 1024
+	const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
+		
+	lds[tid] = v.x;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = v.x;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledX = -Min(-scale(v.x, block_min, block_max), 0.0f); // Remove NaN
+
+	lds[tid] = v.y;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = v.y;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledY = -Min(-scale(v.y, block_min, block_max), 0.0f);
+
+	lds[tid] = v.z;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = v.z;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
+
+	if(pixel_without_mirror.x >= 0 && pixel_without_mirror.x < w &&
+	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
+	)
+	{
+		//scaledX = Clamp(v.x / 15.0f, 0.f, 1.f);
+		//scaledY = Clamp(v.y / 15.0f, 0.f, 1.f);
+		//scaledZ = Clamp(v.z / 15.0f, 0.f, 1.f);
+		store3(normalized_world_positions, linear_pixel, vec3(scaledX, scaledY, scaledZ));
 	}
 }
 
-extern "C" void run_rescale_features(
+extern "C" void run_rescale_world_positions_pr(
 	dim3 const & grid_size,
 	dim3 const & block_size,
-	float * features,
-	unsigned int n
+	RescaleFeaturesParams const & params,
+	float const * world_positions,
+	float * normalized_world_positions
 )
 {
-	rescale_features<<<grid_size, block_size>>>(features, n);
+	rescale_world_positions_pr<<<grid_size, block_size>>>(
+		params,
+		world_positions,
+		normalized_world_positions
+	);
 }
 
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
@@ -265,12 +537,12 @@ extern "C" void run_rescale_features(
 template <typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
 __device__ void template_accumulate_noisy_data_frame0(
 	AccumulateNoisyDataKernelParams params,
-	const NormalType * K_RESTRICT frame_normals,		// [in]  Frame (world) normals
-	const PosType * K_RESTRICT frame_positions,			// [in]  Frame world positions
-	const InColorType * K_RESTRICT frame_noisy_1spp,	// [in]  Frame noisy 1spp color buffer
-	OutColorType * K_RESTRICT frame_acc_noisy,			// [out] Frame accumulated noisy color
-	unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Frame accumulated number of samples (for CMA)
-	FeaturesType * K_RESTRICT features_data				// [out] Features buffer (half-precision)
+	const NormalType * K_RESTRICT frame_normals,			// [in]  Frame (world) normals
+	const PosType * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const InColorType * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color buffer
+	OutColorType * K_RESTRICT frame_acc_noisy,				// [out] Frame accumulated noisy color
+	unsigned char * K_RESTRICT frame_acc_num_spp,			// [out] Frame accumulated number of samples (for CMA)
+	FeaturesType * K_RESTRICT features_data					// [out] Features buffer
 )
 {
 	const ivec2 gtid = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
@@ -299,17 +571,17 @@ __device__ void template_accumulate_noisy_data_frame0(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	const tvec3<InColorType> current_color = load<InColorType>(frame_noisy_1spp, linear_pixel);
+	const tvec3<InColorType> current_color = load3<InColorType>(frame_noisy_1spp, linear_pixel);
 
-	// Current frame world position
-	const tvec3<PosType> world_position = load<PosType>(frame_positions, linear_pixel);
+	// Current frame normalized world position ([0, 1])
+	const tvec3<PosType> normalized_world_position = load3<PosType>(frame_normalized_positions, linear_pixel);
 
 	// Current frame (world) normal
-	const tvec3<NormalType> normal = load<NormalType>(frame_normals, linear_pixel);
+	const tvec3<NormalType> normal = load3<NormalType>(frame_normals, linear_pixel);
 
-	// The set of feature buffers used in the fitting
+	// Compute the set of feature buffers used in the fitting
 	FeaturesType features[BUFFER_COUNT];
-	compute_features(world_position, normal, current_color, features);
+	compute_features(normalized_world_position, normal, current_color, features);
 
 	const unsigned int x_block = gtid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
 	const unsigned int y_block = gtid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
@@ -342,29 +614,29 @@ __device__ void template_accumulate_noisy_data_frame0(
 	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
 	)
 	{
-		store(frame_acc_noisy, linear_pixel, current_color); // Accumulated noisy color
+		store3(frame_acc_noisy, linear_pixel, current_color); // Accumulated noisy color
 		frame_acc_num_spp[linear_pixel] = 1; // Store current number of samples accumulated (for CMA)
 	}
 }
 
 __global__ void accumulate_noisy_data_frame0(
 	AccumulateNoisyDataKernelParams params,
-	const float * K_RESTRICT frame_normals,				// [in]  Frame (world) normals
-	const float * K_RESTRICT frame_positions,			// [in]  Frame world positions
-	const float * K_RESTRICT frame_noisy_1spp,			// [in]  Frame noisy 1spp color buffer
-		  float * K_RESTRICT frame_acc_noisy,			// [out] Frame accumulated noisy color
-		  unsigned char * K_RESTRICT frame_acc_num_spp,	// [out] Frame accumulated number of samples (for CMA)
+	const float * K_RESTRICT frame_normals,					// [in]  Frame (world) normals
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
+		  float * K_RESTRICT frame_acc_noisy,				// [out] Frame accumulated noisy color
+		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Frame accumulated number of samples (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data						// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_data							// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_data					// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_data						// [out] Features buffer (single-precision)
 	#endif
 )
 {
 	template_accumulate_noisy_data_frame0(
 		params,
 		frame_normals,
-		frame_positions,
+		frame_normalized_positions,
 		frame_noisy_1spp,
 		frame_acc_noisy,
 		frame_acc_num_spp,
@@ -374,18 +646,18 @@ __global__ void accumulate_noisy_data_frame0(
 
 __global__ void accumulate_noisy_data_frame0_16bits(
 	AccumulateNoisyDataKernelParams params,
-	const half * K_RESTRICT frame_normals,			// [in]  Frame (world) normals
-	const half * K_RESTRICT frame_positions,		// [in]  Frame world positions
-	const half * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color buffer
-	half * K_RESTRICT frame_acc_noisy,				// [out] Frame accumulated noisy color
-	unsigned char * K_RESTRICT frame_acc_num_spp,	// [out] Frame accumulated number of samples (for CMA)
-	half * K_RESTRICT features_data					// [out] Features buffer (half-precision)
+	const half * K_RESTRICT frame_normals,				// [in]  Frame (world) normals
+	const half * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const half * K_RESTRICT frame_noisy_1spp,			// [in]  Frame noisy 1spp color buffer
+	half * K_RESTRICT frame_acc_noisy,					// [out] Frame accumulated noisy color
+	unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Frame accumulated number of samples (for CMA)
+	half * K_RESTRICT features_data						// [out] Features buffer (half-precision)
 )
 {
 	template_accumulate_noisy_data_frame0(
 		params,
 		frame_normals,
-		frame_positions,
+		frame_normalized_positions,
 		frame_noisy_1spp,
 		frame_acc_noisy,
 		frame_acc_num_spp,
@@ -397,22 +669,22 @@ extern "C" void run_accumulate_noisy_data_frame0(
 	dim3 const & grid_size,
 	dim3 const & block_size,
 	AccumulateNoisyDataKernelParams params,
-	const float * K_RESTRICT frame_normals,				// [in]  Frame (world) normals
-	const float * K_RESTRICT frame_positions,			// [in]  Frame world positions
-	const float * K_RESTRICT frame_noisy_1spp,			// [in]  Frame noisy 1spp color buffer
-		  float * K_RESTRICT frame_acc_noisy,			// [out] Accumulated noisy color
-		  unsigned char * K_RESTRICT frame_acc_num_spp,	// [out] Accumulated number of samples (for CMA)
+	const float * K_RESTRICT frame_normals,					// [in]  Frame (world) normals
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
+		  float * K_RESTRICT frame_acc_noisy,				// [out] Accumulated noisy color
+		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Accumulated number of samples (for CMA)
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data						// [out] Features buffer (half-precision)
+	half * K_RESTRICT features_data							// [out] Features buffer (half-precision)
 	#else
-	float * K_RESTRICT features_data					// [out] Features buffer (single-precision)
+	float * K_RESTRICT features_data						// [out] Features buffer (single-precision)
 	#endif
 )
 {
 	accumulate_noisy_data_frame0<<<grid_size, block_size>>>(
 		params,
 		frame_normals,
-		frame_positions,
+		frame_normalized_positions,
 		frame_noisy_1spp,
 		frame_acc_noisy,
 		frame_acc_num_spp,
@@ -420,24 +692,22 @@ extern "C" void run_accumulate_noisy_data_frame0(
 	);
 }
 
-__global__ void new_accumulate_noisy_data(
+template <typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
+__device__ void template_accumulate_noisy_data(
 	AccumulateNoisyDataKernelParams params,
 	vec2 * K_RESTRICT out_prev_frame_pixel,					// [out] Previous frame pixel coordinates (after reprojection)
 	unsigned char* K_RESTRICT accept_bools,					// [out] Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT frame_normals,					// [in]  Current  frame (world) normals
-	const float * K_RESTRICT prev_frame_normals,			// [in]  Previous frame (world) normals
-	const float * K_RESTRICT frame_positions,				// [in]  Current  frame world positions
-	const float * K_RESTRICT prev_frame_positions,			// [in]  Previous frame world positions
-	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color
-		  float * K_RESTRICT frame_acc_noisy,				// [out] Current  frame accumulated noisy color
-	const float * K_RESTRICT prev_frame_acc_noisy,			// [in]  Previous frame accumulated noisy color
+	const NormalType * K_RESTRICT frame_normals,			// [in]  Current  frame (world) normals
+	const NormalType * K_RESTRICT prev_frame_normals,		// [in]  Previous frame (world) normals
+	const PosType * K_RESTRICT frame_positions,				// [in]  Current  frame world positions
+	const PosType * K_RESTRICT prev_frame_positions,		// [in]  Previous frame world positions
+	const PosType * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const InColorType * K_RESTRICT frame_noisy_1spp,		// [in]  Frame noisy 1spp color
+		  OutColorType * K_RESTRICT frame_acc_noisy,		// [out] Current  frame accumulated noisy color
+	const OutColorType * K_RESTRICT prev_frame_acc_noisy,	// [in]  Previous frame accumulated noisy color
 	const unsigned char * K_RESTRICT prev_frame_acc_spp,	// [in]  Previous frame accumulated number of samples (for CMA)
 		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Current  frame accumulated number of samples (for CMA)
-	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data,						// [out] Features buffer (half-precision)
-	#else
-	float * K_RESTRICT features_data,						// [out] Features buffer (single-precision)
-	#endif
+	FeaturesType * K_RESTRICT features_data,				// [out] Features buffer
 	const mat4x4 prev_frame_camera_matrix,					// [in]  ViewProj matrix of previous frame
 	const vec2 pixel_offset
 )
@@ -468,15 +738,20 @@ __global__ void new_accumulate_noisy_data(
 	// The direction of the secondary ray is decided based on importance sampling. We also trace a second shadow ray from the
 	// intersection point of the secondary ray.
 	// Consequently, the 1spp pixel input has one rasterized primary ray (non-noisy), one ray-traced secondary ray and two ray-traced shadow rays.
-	const vec3 current_color = load_float3(frame_noisy_1spp, linear_pixel);
+	const vec3 current_color = load3<float>(frame_noisy_1spp, linear_pixel);
 
-	// Current frame world position
-	const vec4 world_position = vec4(load_float3(frame_positions, linear_pixel), 1.0f);
+	// Current frame normalized world position ([0, 1])
+	const tvec3<PosType> normalized_world_position = load3<PosType>(frame_normalized_positions, linear_pixel);
 
 	// Current frame (world) normal
-	const vec3 normal = load_float3(frame_normals, linear_pixel);
+	const vec3 normal = load3<float>(frame_normals, linear_pixel);
 
 	// Project current world position into previous frame with the previous ViewProj matrix
+
+	// Current frame world position
+	// TODO: instead of comparing full world positions, use only depth of current, previous and
+	// reprojected frame to detect (dis)occlusion
+	const vec4 world_position = vec4(load3<float>(frame_positions, linear_pixel), 1.f);
 
 	// Matrix multiplication and normalization to 0..1
 	vec2 prev_frame_uv;
@@ -534,7 +809,7 @@ __global__ void new_accumulate_noisy_data(
 			const int linear_sample_location = sample_location.y * w + sample_location.x;
 
 			// Fetch previous frame world position
-			vec3 prev_world_position = load_float3(prev_frame_positions, linear_sample_location);
+			vec3 prev_world_position = load3<float>(prev_frame_positions, linear_sample_location);
 
 			// TODO: find a another metric to discard wrong history
 			// -> world position is normalized to [0, 1]...
@@ -547,7 +822,7 @@ __global__ void new_accumulate_noisy_data(
 			if(position_distance_squared < float(POSITION_LIMIT_SQUARED))
 			{
 				// Fetch previous frame normal
-				vec3 prev_normal = load_float3(prev_frame_normals, linear_sample_location);
+				vec3 prev_normal = load3<float>(prev_frame_normals, linear_sample_location);
 
 				// Distance of the normals
 				// TODO: could use some other distance metric (e.g. angle), but we use hard
@@ -564,7 +839,7 @@ __global__ void new_accumulate_noisy_data(
 					sample_spp += weights[i] * float(prev_frame_acc_spp[linear_sample_location]);
 
 					// Accumulate previous noisy 1spp color
-					previous_color += weights[i] * load_float3(prev_frame_acc_noisy, linear_sample_location);
+					previous_color += weights[i] * load3<float>(prev_frame_acc_noisy, linear_sample_location);
 
 					// Acumulate weights
 					total_weight += weights[i];
@@ -622,16 +897,11 @@ __global__ void new_accumulate_noisy_data(
 		new_spp = (sample_spp > 254.f) ? 255 : convert_uchar_sat_rte(sample_spp) + 1;
 	}
 
-	vec3 new_color = blend_alpha * current_color + (1.f - blend_alpha) * previous_color; // Lerp(previous_color, current_color, blend_alpha);
+	vec3 new_color = Lerp(previous_color, current_color, blend_alpha);
 
-	// The set of feature buffers used in the fitting
-	float features[BUFFER_COUNT] =
-	{
-		FEATURE_BUFFERS, // expands to 1.f, normal.x, ..., world_position.x, ..., world_position.x * world_position.x, ...
-		new_color.x,
-		new_color.y,
-		new_color.z
-	};
+	// Compute the set of feature buffers used in the fitting
+	FeaturesType features[BUFFER_COUNT];
+	compute_features(normalized_world_position, normal, current_color, features);
 
 	const unsigned int x_block = gtid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
 	const unsigned int y_block = gtid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
@@ -650,8 +920,7 @@ __global__ void new_accumulate_noisy_data(
 		// Offset in feature buffer (data are concatenated)
 		// | Block 0 thread 0 feature 0 | Block 0 thread 1 feature 0 | ... | Block 0 thread 0 feature M | ... | Block 1 thread 0 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
 		const unsigned int featureOffset = features_base_offset + featureIndex * BLOCK_PIXELS;
-		float feature = features[featureIndex];
-		store_feature(features_data, featureOffset, feature);
+		store_feature(features_data, featureOffset, features[featureIndex]);
 	}
 
 	// The kernel works on a workset of size WORKSET_WITH_MARGINS_WIDTH x WORKSET_WITH_MARGINS_HEIGHT
@@ -665,7 +934,7 @@ __global__ void new_accumulate_noisy_data(
 	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
 	)
 	{
-		store_float3(frame_acc_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
+		store3(frame_acc_noisy, linear_pixel, new_color); // Accumulated noisy 1spp
 		out_prev_frame_pixel[linear_pixel] = prev_frame_pixel_f; // Previous frame pixel coordinates (to sample history)
 		accept_bools[linear_pixel] = store_accept; // "Previous frame bilinear samples validity" bitmask
 		frame_acc_num_spp[linear_pixel] = new_spp; // Store current number of samples accumulated (for CMA)
@@ -678,9 +947,53 @@ __global__ void new_accumulate_noisy_data(
 		debug = HeatMap(Saturate(float(new_spp) / 255.f));
 		//debug = vec3(float(store_accept > 0));
 		//debug = vec3(float(store_accept == ((1 << 4) - 1)));
-		store_float3(acc_noisy, linear_pixel, debug);
+		store3(acc_noisy, linear_pixel, debug);
 		#endif
 	}
+}
+
+
+__global__ void new_accumulate_noisy_data(
+	AccumulateNoisyDataKernelParams params,
+	vec2 * K_RESTRICT out_prev_frame_pixel,					// [out] Previous frame pixel coordinates (after reprojection)
+	unsigned char* K_RESTRICT accept_bools,					// [out] Validity mask of bilinear samples in previous frame (after reprojection)
+	const float * K_RESTRICT frame_normals,					// [in]  Current  frame (world) normals
+	const float * K_RESTRICT prev_frame_normals,			// [in]  Previous frame (world) normals
+	const float * K_RESTRICT frame_positions,				// [in]  Current  frame world positions
+	const float * K_RESTRICT prev_frame_positions,			// [in]  Previous frame world positions
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
+	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color
+		  float * K_RESTRICT frame_acc_noisy,				// [out] Current  frame accumulated noisy color
+	const float * K_RESTRICT prev_frame_acc_noisy,			// [in]  Previous frame accumulated noisy color
+	const unsigned char * K_RESTRICT prev_frame_acc_spp,	// [in]  Previous frame accumulated number of samples (for CMA)
+		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Current  frame accumulated number of samples (for CMA)
+	#if USE_HALF_PRECISION_IN_FEATURES_DATA
+	half * K_RESTRICT features_data,						// [out] Features buffer (half-precision)
+	#else
+	float * K_RESTRICT features_data,						// [out] Features buffer (single-precision)
+	#endif
+	const mat4x4 prev_frame_camera_matrix,					// [in]  ViewProj matrix of previous frame
+	const vec2 pixel_offset
+)
+{
+	template_accumulate_noisy_data(
+		params,
+		out_prev_frame_pixel,
+		accept_bools,
+		frame_normals,
+		prev_frame_normals,
+		frame_positions,
+		prev_frame_positions,
+		frame_normalized_positions,
+		frame_noisy_1spp,
+		frame_acc_noisy,
+		prev_frame_acc_noisy,
+		prev_frame_acc_spp,
+		frame_acc_num_spp,
+		features_data,
+		prev_frame_camera_matrix,
+		pixel_offset
+	);
 }
 
 extern "C" void run_new_accumulate_noisy_data(
@@ -693,6 +1006,7 @@ extern "C" void run_new_accumulate_noisy_data(
 	const float * K_RESTRICT prev_frame_normals,			// [in]  Previous (world) normals
 	const float * K_RESTRICT frame_positions,				// [in]  Current  world positions
 	const float * K_RESTRICT prev_frame_positions,			// [in]  Previous world positions
+	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
 	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
 		  float * K_RESTRICT frame_acc_noisy,				// [out] Current  noisy 1spp color
 	const float * K_RESTRICT prev_frame_acc_noisy,			// [in]  Previous noisy 1spp color
@@ -715,6 +1029,7 @@ extern "C" void run_new_accumulate_noisy_data(
 		prev_frame_normals,
 		frame_positions,
 		prev_frame_positions,
+		frame_normalized_positions,
 		frame_noisy_1spp,
 		frame_acc_noisy,
 		prev_frame_acc_noisy,
@@ -924,10 +1239,10 @@ __global__ void new_fitter(
 						#if USE_HALF_PRECISION_IN_FEATURES_DATA
 						float tmp = HalfToFloat(featuresCache[featuresCacheOffset]);
 						#else
-						const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
 						float tmp = featuresCache[featuresCacheOffset];
 						#endif
 					#else
+						const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
 						float tmp = load_feature(features_buffer, featureOffset);
 					#endif
 
@@ -1538,7 +1853,7 @@ __global__ void fitter16bits(
 		fweight.x = HalfToFloat(weight[0]);
 		fweight.y = HalfToFloat(weight[1]);
 		fweight.z = HalfToFloat(weight[2]);
-		store_float3(weights, index, fweight);
+		store3(weights, index, fweight);
 	}
 }
 
@@ -1563,7 +1878,7 @@ __global__ void new_weighted_sum(
 	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 		  float * K_RESTRICT output,			// [out] Noise-free color estimate
 	const float * K_RESTRICT current_normals,	// [in]  Current (world) normals
-	const float * K_RESTRICT current_positions	// [in]  Current world positions
+	const float * K_RESTRICT normalized_world_positions	// [in]  Current world positions
 )
 {
 	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
@@ -1583,13 +1898,11 @@ __global__ void new_weighted_sum(
 
 	// Reload features from buffer here to have values without stochastic regularization noise
 	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)
-	vec3 world_position = load_float3(current_positions, linear_pixel); 
-	vec3 normal = load_float3(current_normals, linear_pixel);
-	float features[BUFFER_COUNT - 3] =
-	{
-		// TODO: replace with function that fill the array?
-		FEATURE_BUFFERS // expands to 1.f, normal.x, ..., world_position.x, ..., world_position.x * world_position.x, ...
-	};
+	vec3 normalized_world_position = load3<float>(normalized_world_positions, linear_pixel); 
+	vec3 normal = load3<float>(current_normals, linear_pixel);
+
+	float features[BUFFER_COUNT-3];
+	compute_features_without_color(normalized_world_position, normal, features);
 
 	const unsigned baseWeightOffset = group_index * (BUFFER_COUNT - 3);
 
@@ -1598,7 +1911,7 @@ __global__ void new_weighted_sum(
 	for(int feature_buffer = 0; feature_buffer < BUFFER_COUNT - 3; feature_buffer++)
 	{
 		float feature = features[feature_buffer];
-		vec3 weight = load_float3(weights, baseWeightOffset + feature_buffer);
+		vec3 weight = load3<float>(weights, baseWeightOffset + feature_buffer);
 		color += weight * feature;
 	}
 
@@ -1606,9 +1919,8 @@ __global__ void new_weighted_sum(
 	color = Max(vec3(0.f), color); // TODO -Min(-color, vec3(0.f));
 
 	// Store results
-	store_float3(output, linear_pixel, color);
+	store3(output, linear_pixel, color);
 }
-
 
 extern "C" void run_new_weighted_sum(
 	dim3 const & grid_size,
@@ -1652,13 +1964,13 @@ __global__ void accumulate_filtered_data_frame0(
 	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
 	// Noise-free estimate of the color (computed via a weighted sum of features)
-	vec3 filtered_color = load_float3(filtered_frame, linear_pixel);
-	store_float3(accumulated_frame, linear_pixel, filtered_color);
+	vec3 filtered_color = load3<float>(filtered_frame, linear_pixel);
+	store3(accumulated_frame, linear_pixel, filtered_color);
 
 	// Remodulate albedo and tone map
-	vec3 albedo = load_float3(albedo_buffer, linear_pixel);
+	vec3 albedo = load3<float>(albedo_buffer, linear_pixel);
 	const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * filtered_color), 0.454545f), vec3(0.f), vec3(1.f));
-	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+	store3(tone_mapped_frame, linear_pixel, tone_mapped_color);
 }
 
 extern "C" void run_accumulate_filtered_data_frame0(
@@ -1705,7 +2017,7 @@ __global__ void new_accumulate_filtered_data(
 	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
 	// Noise-free estimate of the color (computed via a weighted sum of features)
-	vec3 filtered_color = load_float3(filtered_frame, linear_pixel);
+	vec3 filtered_color = load3<float>(filtered_frame, linear_pixel);
 	vec3 prev_color = vec3(0.f, 0.f, 0.f);
 	float blend_alpha = 1.f;
 
@@ -1734,7 +2046,7 @@ __global__ void new_accumulate_filtered_data(
 		{
 			float weight = one_minus_prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
 			int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x;
-			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			prev_color += weight * load3<float>(accumulated_prev_frame, linear_sample_location);
 			total_weight += weight;
 		}
 
@@ -1742,7 +2054,7 @@ __global__ void new_accumulate_filtered_data(
 		{
 			float weight = prev_pixel_fract.x * one_minus_prev_pixel_fract.y;
 			int linear_sample_location = prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1;
-			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			prev_color += weight * load3<float>(accumulated_prev_frame, linear_sample_location);
 			total_weight += weight;
 		}
 
@@ -1750,7 +2062,7 @@ __global__ void new_accumulate_filtered_data(
 		{
 			float weight = one_minus_prev_pixel_fract.x * prev_pixel_fract.y;
 			int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x;
-			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			prev_color += weight * load3<float>(accumulated_prev_frame, linear_sample_location);
 			total_weight += weight;
 		}
 
@@ -1758,7 +2070,7 @@ __global__ void new_accumulate_filtered_data(
 		{
 			float weight = prev_pixel_fract.x * prev_pixel_fract.y;
 			int linear_sample_location = (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1;
-			prev_color += weight * load_float3(accumulated_prev_frame, linear_sample_location);
+			prev_color += weight * load3<float>(accumulated_prev_frame, linear_sample_location);
 			total_weight += weight;
 		}
 
@@ -1787,12 +2099,12 @@ __global__ void new_accumulate_filtered_data(
 
 	// Mix with colors and store results
 	vec3 accumulated_color = blend_alpha * filtered_color + (1.f - blend_alpha) * prev_color; // Lerp(prev_color, filtered_color, blend_alpha);
-	store_float3(accumulated_frame, linear_pixel, accumulated_color);
+	store3(accumulated_frame, linear_pixel, accumulated_color);
 
 	// Remodulate albedo and tone map
-	vec3 albedo = load_float3(albedo_buffer, linear_pixel);
+	vec3 albedo = load3<float>(albedo_buffer, linear_pixel);
 	const vec3 tone_mapped_color = Clamp(Pow(Max(vec3(0.f), albedo * accumulated_color), 0.454545f), vec3(0.f), vec3(1.f));
-	store_float3(tone_mapped_frame, linear_pixel, tone_mapped_color);
+	store3(tone_mapped_frame, linear_pixel, tone_mapped_color);
 }
 
 extern "C" void run_new_accumulate_filtered_data(
@@ -1844,7 +2156,7 @@ __global__ void taa_frame0(
 	// Linear pixel index
 	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
-	store_float3(result_frame, linear_pixel, load_float3(new_frame, linear_pixel));
+	store3(result_frame, linear_pixel, load3<float>(new_frame, linear_pixel));
 }
 
 extern "C" void run_taa_frame0(
@@ -1879,7 +2191,7 @@ __global__ void new_taa(
 	const unsigned int linear_pixel = pixel.y * w + pixel.x;
 
 	// Current frame color
-	vec3 my_new_color = load_float3(new_frame, linear_pixel);
+	vec3 my_new_color =	load3<float>(new_frame, linear_pixel);
 
 	// Previous frame pixel coordinates
 	const vec2 prev_frame_pixel_f = in_prev_frame_pixel[linear_pixel];
@@ -1890,7 +2202,7 @@ __global__ void new_taa(
 	   prev_frame_pixel_i.x >= w || prev_frame_pixel_i.y >= h
 	)
 	{
-		store_float3(result_frame, linear_pixel, my_new_color);
+		store3(result_frame, linear_pixel, my_new_color);
 		return;
 	}
 
@@ -1912,7 +2224,7 @@ __global__ void new_taa(
 				if(x == 0 && y == 0)
 					sample_color = my_new_color;
 				else
-					sample_color = load_float3(new_frame, sample_location.x + sample_location.y * w);
+					sample_color = load3<float>(new_frame, sample_location.x + sample_location.y * w);
 
 				sample_color = RGB_to_YCoCg(sample_color);
 
@@ -1940,14 +2252,14 @@ __global__ void new_taa(
 		if(prev_frame_pixel_i.x >= 0)
 		{
 			float weight = one_minus_pixel_fract.x * one_minus_pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x);
+			prev_color += weight * load3<float>(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x);
 			total_weight += weight;
 		}
 
 		if(prev_frame_pixel_i.x < w - 1)
 		{
 			float weight = pixel_fract.x * one_minus_pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1);
+			prev_color += weight * load3<float>(prev_frame, prev_frame_pixel_i.y * w + prev_frame_pixel_i.x + 1);
 			total_weight += weight;
 		}
 	}
@@ -1957,14 +2269,14 @@ __global__ void new_taa(
 		if(prev_frame_pixel_i.x >= 0)
 		{
 			float weight = one_minus_pixel_fract.x * pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x);
+			prev_color += weight * load3<float>(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x);
 			total_weight += weight;
 		}
 
 		if(prev_frame_pixel_i.x < w - 1)
 		{
 			float weight = pixel_fract.x * pixel_fract.y;
-			prev_color += weight * load_float3(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1);
+			prev_color += weight * load3<float>(prev_frame, (prev_frame_pixel_i.y + 1) * w + prev_frame_pixel_i.x + 1);
 			total_weight += weight;
 		}
 	}
@@ -1980,7 +2292,7 @@ __global__ void new_taa(
 	vec3 prev_color_rgb = YCoCg_to_RGB(Clamp(prev_color_ycocg, minimum, maximum));
 
 	vec3 result_color = TAA_BLEND_ALPHA * my_new_color + (1.f - TAA_BLEND_ALPHA) * prev_color_rgb; // Lerp(prev_color_rgb, my_new_color, TAA_BLEND_ALPHA);
-	store_float3(result_frame, linear_pixel, result_color);
+	store3(result_frame, linear_pixel, result_color);
 }
 
 extern "C" void run_new_taa(
