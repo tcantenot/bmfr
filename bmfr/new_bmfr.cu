@@ -901,7 +901,7 @@ __device__ void template_accumulate_noisy_data(
 
 	// Compute the set of feature buffers used in the fitting
 	FeaturesType features[BUFFER_COUNT];
-	compute_features(normalized_world_position, normal, current_color, features);
+	compute_features(normalized_world_position, normal, new_color, features);
 
 	const unsigned int x_block = gtid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
 	const unsigned int y_block = gtid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
