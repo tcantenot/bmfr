@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -166,6 +166,7 @@ If exist "$(ProjectDir)..\3rd-party\tbb\bin\x64\release\*.dll" copy "$(ProjectDi
     <CudaCompile>
       <CodeGeneration>compute_20,compute_20</CodeGeneration>
       <Optimization>O2</Optimization>
+      <GPUDebugInfo>false</GPUDebugInfo>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -201,6 +202,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <CudaCompile />
     <CudaCompile>
       <CodeGeneration>compute_20,compute_20</CodeGeneration>
+      <GPUDebugInfo>false</GPUDebugInfo>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
