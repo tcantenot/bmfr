@@ -7,6 +7,9 @@
 // - PixelCoordsToShiftedPixelCoords(pixelCoords, frameNumber, w, h) -> pixelCoords - BLOCK_EDGE_HALF + BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];
 // - ShiftedPixelCoordsToPixelCoords(shiftedPixelCoords, frameNumber, w, h) -> shiftedPixelCoords + BLOCK_EDGE_HALF - BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
+#define NORMALIZE_FEATURES_USING_4_BLOCKS 0
+#define USE_FEATURES_VGPR_CACHE USE_HALF_PRECISION_IN_FEATURES_DATA
+
 
 #define K_SUPPORT_HALF16_ARITHMETIC (__CUDA_ARCH__ >= 530)
 
@@ -465,6 +468,8 @@ __global__ void rescale_world_positions_pr(
 	const int w = params.sizeX;
 	const int h = params.sizeY;
 
+	// Single block
+	#if !NORMALIZE_FEATURES_USING_4_BLOCKS
 	// Mirror indexed of the input. x and y are always less than one size out of
 	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
 	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
@@ -505,6 +510,67 @@ __global__ void rescale_world_positions_pr(
 	SyncThreads();
 	parallel_reduction_max_1024(&block_max, lds, tid);
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
+
+	#else // 4-blocks (not really a win in quality...)
+	const ivec2 offset = -ivec2(BLOCK_EDGE_HALF) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+
+	ivec2 offsets[4] =
+	{
+		ivec2(offset.x - offset.x / 2, offset.y - offset.y / 2),
+		ivec2(offset.x - offset.x / 2, offset.y + offset.y / 2),
+		ivec2(offset.x + offset.x / 2, offset.y - offset.y / 2),
+		ivec2(offset.x + offset.x / 2, offset.y + offset.y / 2)
+	};
+
+	const ivec2 pixel_without_mirror = gtid + offset;
+	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
+	const int linear_pixel = pixel.y * w + pixel.x;
+	const vec3 v = load3<float>(world_positions, linear_pixel);
+
+	const ivec2 pixel_without_mirror_0 = gtid + offsets[0];
+	const ivec2 pixel_0 = mirror2(pixel_without_mirror_0, ivec2(w, h));
+	const int linear_pixel_0 = pixel_0.y * w + pixel_0.x;
+	vec3 v_0 = load3<float>(world_positions, linear_pixel_0);
+
+	vec3 vmin = v_0;
+	vec3 vmax = v_0;
+	for(unsigned int i = 1; i < 4; ++i)
+	{
+		const ivec2 pixel_without_mirror_i = gtid + offsets[i];
+		const ivec2 pixel_i = mirror2(pixel_without_mirror_i, ivec2(w, h));
+		const int linear_pixel_i = pixel_i.y * w + pixel_i.x;
+		vec3 v_i = load3<float>(world_positions, linear_pixel_i);
+		vmin = Min(vmin, v_i);
+		vmax = Max(vmax, v_i);
+	}
+	
+	// Note: assume group of size 1024
+	const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
+		
+	lds[tid] = vmin.x;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = vmax.x;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledX = -Min(-scale(v.x, block_min, block_max), 0.0f); // Remove NaN
+
+	lds[tid] = vmin.y;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = vmax.y;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledY = -Min(-scale(v.y, block_min, block_max), 0.0f);
+
+	lds[tid] = vmin.z;
+	SyncThreads();
+	parallel_reduction_min_1024(&block_min, lds, tid);
+	lds[tid] = vmax.z;
+	SyncThreads();
+	parallel_reduction_max_1024(&block_max, lds, tid);
+	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
+	#endif
 
 	if(pixel_without_mirror.x >= 0 && pixel_without_mirror.x < w &&
 	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
@@ -1042,8 +1108,6 @@ extern "C" void run_new_accumulate_noisy_data(
 }
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
-
-#define USE_FEATURES_VGPR_CACHE USE_HALF_PRECISION_IN_FEATURES_DATA
 
 // Block size: (256, 1, 1)
 __global__ void new_fitter(
