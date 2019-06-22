@@ -138,7 +138,7 @@
       <Device>0</Device>
     </Intel_OpenCL_Build_Rules>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\3rd-party\oiio\include;$(INTELOCLSDKROOT)include;$(AMDAPPSDKROOT)include;$(CUDA_PATH)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rd-party\oiio\include;..\3rd-party\oidn\include;$(INTELOCLSDKROOT)include;$(AMDAPPSDKROOT)include;$(CUDA_PATH)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>__x86_64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <Optimization>MaxSpeed</Optimization>
       <MinimalRebuild>true</MinimalRebuild>
@@ -149,16 +149,18 @@
       <PrecompiledHeader />
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\;$(INTELOCLSDKROOT)lib\x64;$(AMDAPPSDKROOT)lib\x64;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIO.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\release;..\3rd-party\oidn\lib\x64\release;..\3rd-party\tbb\lib\x64\release;$(INTELOCLSDKROOT)lib\x64;$(AMDAPPSDKROOT)lib\x64;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIO.lib;OpenImageDenoise.lib;tbb.lib;tbbmalloc.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>No</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
       <Command>If exist "*.cl" copy "*.cl" "$(OutDir)\";
-If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" "$(OutDir)";</Command>
+If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\release\*.dll" copy "$(ProjectDir)..\3rd-party\oiio\bin\x64\release\*.dll" "$(OutDir)";
+If exist "$(ProjectDir)..\3rd-party\oidn\bin\x64\release\*.dll" copy "$(ProjectDir)..\3rd-party\oidn\bin\x64\release\*.dll" "$(OutDir)";
+If exist "$(ProjectDir)..\3rd-party\tbb\bin\x64\release\*.dll" copy "$(ProjectDir)..\3rd-party\tbb\bin\x64\release\*.dll" "$(OutDir)";</Command>
     </PostBuildEvent>
     <CudaCompile />
     <CudaCompile>
@@ -171,7 +173,7 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
       <Device>0</Device>
     </Intel_OpenCL_Build_Rules>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\3rd-party\oiio\include;$(CUDA_PATH)\include;$(INTELOCLSDKROOT)include;$(AMDAPPSDKROOT)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\3rd-party\oiio\include;..\3rd-party\oidn\include;$(CUDA_PATH)\include;$(INTELOCLSDKROOT)include;$(AMDAPPSDKROOT)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>__x86_64;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <Optimization>Disabled</Optimization>
       <MinimalRebuild>true</MinimalRebuild>
@@ -182,24 +184,23 @@ If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIO.dll" copy "$(Projec
       <PrecompiledHeader />
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\;$(CUDA_PATH)\lib\x64;$(AMDAPPSDKROOT)lib\x64;$(INTELOCLSDKROOT)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIOD.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>..\3rd-party\oiio\lib\x64\debug\;..\3rd-party\oidn\lib\x64\debug;..\3rd-party\tbb\lib\x64\debug;$(CUDA_PATH)\lib\x64;$(AMDAPPSDKROOT)lib\x64;$(INTELOCLSDKROOT)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>cudart.lib;Opengl32.lib;OpenCL.lib;OpenImageIOD.lib;OpenImageDenoiseD.lib;tbb.lib;tbbmalloc.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>Debug</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
       <Command>If exist "*.cl" copy "*.cl" "$(OutDir)";
-If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIOD.dll" copy "$(ProjectDir)..\3rd-party\oiio\bin\x64\OpenImageIOD.dll" "$(OutDir)";
+If exist "$(ProjectDir)..\3rd-party\oiio\bin\x64\debug\*.dll" copy "$(ProjectDir)..\3rd-party\oiio\bin\x64\debug\*.dll" "$(OutDir)";
+If exist "$(ProjectDir)..\3rd-party\oidn\bin\x64\debug\*.dll" copy "$(ProjectDir)..\3rd-party\oidn\bin\x64\debug\*.dll" "$(OutDir)"
+If exist "$(ProjectDir)..\3rd-party\tbb\bin\x64\debug\*.dll" copy "$(ProjectDir)..\3rd-party\tbb\bin\x64\debug\*.dll" "$(OutDir)";
 If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll" "$(OutDir)";</Command>
     </PostBuildEvent>
     <CudaLink />
     <CudaCompile />
     <CudaCompile />
     <CudaCompile>
-      <Keep>true</Keep>
       <CodeGeneration>compute_20,compute_20</CodeGeneration>
-      <InterleaveSourceInPTX>true</InterleaveSourceInPTX>
-      <PtxAsOptionV>true</PtxAsOptionV>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -222,6 +223,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="BandwidthTests.hpp" />
     <ClInclude Include="config.hpp" />
     <ClInclude Include="cuda_helpers.hpp" />
+    <ClInclude Include="IntelOpenImageDenoiser.hpp" />
     <ClInclude Include="new_bmfr.cuh" />
     <ClInclude Include="new_bmfr_cuda.hpp" />
     <ClInclude Include="opencl_helpers.hpp" />

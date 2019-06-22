@@ -13,6 +13,9 @@
     <Filter Include="OpenCL\CLUtils">
       <UniqueIdentifier>{48182b0e-1ae0-4098-9981-899eced2e63e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Intel">
+      <UniqueIdentifier>{540e1e43-81cb-4de3-8418-c9b58a6bbaa6}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="..\bmfr\bmfr.cu">
@@ -57,6 +60,9 @@
     </ClInclude>
     <ClInclude Include="BandwidthTests.hpp">
       <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="IntelOpenImageDenoiser.hpp">
+      <Filter>Intel</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -1,0 +1,5 @@
+Threading Building Blocks 2019 Update 7
+
+Version: tbb_2019_20190522oss
+
+https://github.com/intel/tbb/releases

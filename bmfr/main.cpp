@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include "BandwidthTests.hpp"
+#include "IntelOpenImageDenoiser.hpp"
 
 // CUDA 8.0 on Visual Studio 2017
 //  - Install CUDA 8.0
@@ -71,6 +72,9 @@ int bmfr()
 int main()
 {
 	//BandwidthTests();
+	//return 0;
+
+	//IntelOpenImageDenoiser();
 	//return 0;
 
 	for(int i = 0; i < 1; ++i)

@@ -1,9 +1,8 @@
-.vs
-data
-x64
 *.vcxproj.user
 *.pdb
 *.png
-bin
-build
-outputs
+.vs/*
+data/*
+bin/*
+build/*
+outputs/*
