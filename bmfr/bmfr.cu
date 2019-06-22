@@ -1,5 +1,8 @@
 #include "bmfr.cuh"
 
+
+#define WORLD_SCALE_SQR_OPTIM 0
+
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
 
 __global__ void accumulate_noisy_data(
@@ -428,8 +431,25 @@ __global__ void fitter(
 		for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
 		{
 			const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+
+			#if !WORLD_SCALE_SQR_OPTIM
 			float scaled_value = scale(load_feature(features_buffer, featureOffset), block_min, block_max);
+			#else
+			float scaled_value;
+			if(featureIndex < feature_to_scale_beg_idx + 3)
+			{
+				scaled_value = scale(load_feature(features_buffer, featureOffset), block_min, block_max);
+			}
+			else
+			{
+				const unsigned int baseFeatureOffset2 = (featureIndex - 3) * BLOCK_PIXELS + threadFeaturesBuffersOffset;
+				scaled_value = load_feature(features_buffer, subVector * LOCAL_SIZE + baseFeatureOffset2);
+				scaled_value *= scaled_value;
+			}
+			#endif
+
 			store_feature(features_buffer, featureOffset, scaled_value);
+			SyncThreads();
 		}
 	}
 
@@ -735,7 +755,22 @@ __global__ void weighted_sum(
 		if(feature_buffer >= FEATURES_NOT_SCALED)
 		{
 			const int min_max_index = (group_index * FEATURES_SCALED + feature_buffer - FEATURES_NOT_SCALED) * 2;
+			
+			#if !WORLD_SCALE_SQR_OPTIM
 			feature = scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
+			#else
+			if(feature_buffer < FEATURES_NOT_SCALED + 3)
+			{
+				feature = scale(feature, mins_maxs[min_max_index + 0], mins_maxs[min_max_index + 1]);
+			}
+			else
+			{
+				const int min_max_index2 = (group_index * FEATURES_SCALED + (feature_buffer - 3) - FEATURES_NOT_SCALED) * 2;
+				feature = features[feature_buffer-3];
+				feature = scale(feature, mins_maxs[min_max_index2 + 0], mins_maxs[min_max_index2 + 1]);
+				feature *= feature;
+			}
+			#endif
 		}
 
 		// Load weight and sum
