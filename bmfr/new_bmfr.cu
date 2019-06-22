@@ -1396,7 +1396,7 @@ __global__ void new_fitter(
 		// Store weights
 		const int index = groupId * (BUFFER_COUNT - 3) + threadId;
 		const vec3 weight = load_r_mat(r_mat, R_EDGE - 1, threadId);
-		store_float3(weights, index, weight);
+		store3(weights, index, weight);
 	}
 }
 
