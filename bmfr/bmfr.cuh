@@ -38,6 +38,9 @@ struct tvec2
 	__device__ tvec2 operator-(tvec2 const & o) const { return tvec2(x - o.x, y - o.y); }
 	__device__ tvec2 operator*(tvec2 const & o) const { return tvec2(x * o.x, y * o.y); }
 
+	__device__ tvec2 operator+() const { return tvec2(+x,+ y); }
+	__device__ tvec2 operator-() const { return tvec2(-x, -y); }
+
 	__device__ tvec2 const & operator-=(tvec2<T> const & v) { x -= v.x; y -= v.y; return *this; }
 
 	__device__ tvec2 const & operator+=(T v) { x += v; y += v; return *this; }
