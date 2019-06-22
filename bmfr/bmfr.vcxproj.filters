@@ -55,6 +55,9 @@
     <ClInclude Include="new_bmfr_cuda.hpp">
       <Filter>Cuda</Filter>
     </ClInclude>
+    <ClInclude Include="BandwidthTests.hpp">
+      <Filter>Cuda</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bmfr\bmfr_cuda.cpp">

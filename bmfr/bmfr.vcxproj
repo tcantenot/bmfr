@@ -219,6 +219,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="..\bmfr\bmfr_cuda_opencl.hpp" />
     <ClInclude Include="..\bmfr\bmfr_c_opencl.hpp" />
     <ClInclude Include="..\bmfr\CLUtils\CLUtils.hpp" />
+    <ClInclude Include="BandwidthTests.hpp" />
     <ClInclude Include="config.hpp" />
     <ClInclude Include="cuda_helpers.hpp" />
     <ClInclude Include="new_bmfr.cuh" />
