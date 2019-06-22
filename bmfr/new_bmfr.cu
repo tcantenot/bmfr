@@ -1043,9 +1043,7 @@ extern "C" void run_new_accumulate_noisy_data(
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
 
-// Fitter kernel ///////////////////////////////////////////////////////////////
-
-#define USE_FEATURES_VGPR_CACHE 1
+#define USE_FEATURES_VGPR_CACHE USE_HALF_PRECISION_IN_FEATURES_DATA
 
 // Block size: (256, 1, 1)
 __global__ void new_fitter(
