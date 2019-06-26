@@ -350,7 +350,7 @@ struct AccumulateNoisyDataKernelParams
 {
 	unsigned int sizeX;
 	unsigned int sizeY;
-	unsigned int blockSize;
+	unsigned int fitterBlockSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
 };
@@ -383,6 +383,8 @@ extern "C" void run_accumulate_noisy_data(
 
 struct FitterKernelParams
 {
+	unsigned int fitterBlockSize;
+	unsigned int kernelLocalSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
 };
@@ -407,7 +409,7 @@ struct WeightedSumKernelParams
 {
 	unsigned int sizeX;
 	unsigned int sizeY;
-	unsigned int blockSize;
+	unsigned int fitterBlockSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
 };

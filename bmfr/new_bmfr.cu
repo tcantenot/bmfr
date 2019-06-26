@@ -206,7 +206,7 @@ inline __device__ void compute_features(
 	tvec3<T> const & world_position,
 	tvec3<U> const & normal,
 	tvec3<V> const & noisy_1spp_color,
-	FeatureType features[BUFFER_COUNT]
+	FeatureType * features
 )
 {
 	compute_features_without_color(world_position, normal, features);
@@ -233,7 +233,7 @@ __global__ void rescale_world_positions_pr(
 	const int h = params.sizeY;
 
 	#if !NORMALIZE_FEATURES_USING_4_BLOCKS
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -272,7 +272,7 @@ __global__ void rescale_world_positions_pr(
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
 
 	#else // 4-blocks (not really a win in quality...)
-	const ivec2 offset = -ivec2(params.blockSize / 2) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 offset = -ivec2(params.fitterBlockSize / 2) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
 	ivec2 offsets[4] =
 	{
@@ -374,7 +374,7 @@ __device__ void template_accumulate_noisy_data_frame0(
 	const int h = params.sizeY;
 
 	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -404,13 +404,13 @@ __device__ void template_accumulate_noisy_data_frame0(
 	FeaturesType features[BUFFER_COUNT];
 	compute_features(normalized_world_position, normal, current_color, features);
 
-	const unsigned int x_block = gtid.x / params.blockSize; // Block coordinate x
-	const unsigned int y_block = gtid.y / params.blockSize; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % params.blockSize; // Thread coordinate x inside block in [0, blockSize-1]
-	const unsigned int y_in_block = gtid.y % params.blockSize; // Thread coordinate y inside block in [0, blockSize-1]
+	const unsigned int x_block = gtid.x / params.fitterBlockSize; // Block coordinate x
+	const unsigned int y_block = gtid.y / params.fitterBlockSize; // Block coordinate y
+	const unsigned int x_in_block = gtid.x % params.fitterBlockSize; // Thread coordinate x inside block in [0, blockSize-1]
+	const unsigned int y_in_block = gtid.y % params.fitterBlockSize; // Thread coordinate y inside block in [0, blockSize-1]
 
-	const unsigned int numPixelsInBlock = params.blockSize * params.blockSize;
-	const unsigned int features_base_offset = x_in_block + y_in_block * params.blockSize +
+	const unsigned int numPixelsInBlock = params.fitterBlockSize * params.fitterBlockSize;
+	const unsigned int features_base_offset = x_in_block + y_in_block * params.fitterBlockSize +
 		x_block * numPixelsInBlock * BUFFER_COUNT +
 		y_block * params.worksetWithMarginBlockCountX *
 		numPixelsInBlock * BUFFER_COUNT;
@@ -540,7 +540,7 @@ __device__ void template_accumulate_noisy_data(
 	const int h = params.sizeY;
 
 	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -723,16 +723,16 @@ __device__ void template_accumulate_noisy_data(
 	FeaturesType features[BUFFER_COUNT];
 	compute_features(normalized_world_position, normal, new_color, features);
 
-	const unsigned int x_block = gtid.x / params.blockSize; // Block coordinate x
-	const unsigned int y_block = gtid.y / params.blockSize; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % params.blockSize; // Thread coordinate x inside block in [0, blockSize-1]
-	const unsigned int y_in_block = gtid.y % params.blockSize; // Thread coordinate y inside block in [0, blockSize-1]
+	const unsigned int x_block = gtid.x / params.fitterBlockSize; // Block coordinate x
+	const unsigned int y_block = gtid.y / params.fitterBlockSize; // Block coordinate y
+	const unsigned int x_in_block = gtid.x % params.fitterBlockSize; // Thread coordinate x inside block in [0, blockSize-1]
+	const unsigned int y_in_block = gtid.y % params.fitterBlockSize; // Thread coordinate y inside block in [0, blockSize-1]
 
-	const unsigned int numPixelsInBlock = params.blockSize * params.blockSize;
+	const unsigned int numPixelsInBlock = params.fitterBlockSize * params.fitterBlockSize;
 
 	// TODO: send constants so that:
 	// features_base_offset = x_in_block * params.featureOffsetScale0 + y_in_block * params.featureOffsetScale1;
-	const unsigned int features_base_offset = x_in_block + y_in_block * params.blockSize +
+	const unsigned int features_base_offset = x_in_block + y_in_block * params.fitterBlockSize +
 		x_block * numPixelsInBlock * BUFFER_COUNT +
 		y_block * params.worksetWithMarginBlockCountX *
 		numPixelsInBlock * BUFFER_COUNT;
@@ -867,8 +867,8 @@ extern "C" void run_new_accumulate_noisy_data(
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
 
-// Block size: (256, 1, 1)
-__global__ void new_fitter(
+template <unsigned int NumValuesInBlock, unsigned int LocalSize>
+__global__ void template_fitter(
 	FitterKernelParams params,
 	float * K_RESTRICT weights,					// [out] Features weights
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
@@ -878,10 +878,8 @@ __global__ void new_fitter(
 	#endif
 )
 {
-	// Notes:
-	//  LOCAL_SIZE = 256
-	//	BLOCK_PIXELS = 32 * 32
-	
+	static_assert(NumValuesInBlock % LocalSize == 0, "NumValuesInBlock must be divisible by LocalSize");
+
 	// TODO: send as define for cpp side
 	#if COMPRESSED_R
     //const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
@@ -891,14 +889,14 @@ __global__ void new_fitter(
 	#define R_SHARED_DATA_SIZE ((BUFFER_COUNT - 2) * (BUFFER_COUNT - 2))
 	#endif
 
-	__shared__ float pr_shared_data[LOCAL_SIZE];		// Shared memory used to perform parallel reduction
-	__shared__ float u_vec_sdata[BLOCK_PIXELS];			// Shared memory used to store the 'u' vectors
+	__shared__ float pr_shared_data[LocalSize];			// Shared memory used to perform parallel reduction
+	__shared__ float u_vec_sdata[NumValuesInBlock];		// Shared memory used to store the 'u' vectors
 	__shared__ cvec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
 	__shared__ float u_length_squared;					// Shared memory variable that holds the 'u' vector square length
 	__shared__ float dotProd;							// Shared memory variable that holds the dot product of...
 	__shared__ float vec_length;						// Shared memory variable that holds the vec length			
 
-	float * pr_data_256 = &pr_shared_data[0];
+	float * pSharedData = &pr_shared_data[0];
 	float * u_vec = &u_vec_sdata[0];
 	cvec3 * r_mat = &r_mat_sdata[0];
 
@@ -908,17 +906,17 @@ __global__ void new_fitter(
 	const unsigned int blockIndexX = groupId % params.worksetWithMarginBlockCountX;
 	const unsigned int blockIndexY = groupId / params.worksetWithMarginBlockCountX;
 	const unsigned int linearBlockIndex = blockIndexY * params.worksetWithMarginBlockCountX + blockIndexX;
-	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * BUFFER_COUNT * BLOCK_PIXELS + threadId;
+	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * BUFFER_COUNT * NumValuesInBlock + threadId;
 
-	const unsigned int baseSeed = params.frameNumber * BUFFER_COUNT * BLOCK_PIXELS + threadId;
+	const unsigned int baseSeed = params.frameNumber * BUFFER_COUNT * NumValuesInBlock + threadId;
 	
 	// Non square matrices require processing every column.
 	// Otherwise result is OKish, but R is not upper triangular matrix
-	const int limit = (BUFFER_COUNT == BLOCK_PIXELS) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
+	const int limit = (BUFFER_COUNT == NumValuesInBlock) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
 
 	
 	#if USE_FEATURES_VGPR_CACHE
-	const unsigned int FeaturesCacheSize = BLOCK_PIXELS / LOCAL_SIZE * BUFFER_COUNT;
+	const unsigned int FeaturesCacheSize = (NumValuesInBlock / LocalSize) * BUFFER_COUNT;
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half featuresCache[FeaturesCacheSize];
 	#else
@@ -927,12 +925,12 @@ __global__ void new_fitter(
 
 	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
 	{
-		const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+		const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
+		const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
 
-		for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
+		for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
 		{
-			const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+			const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
 			const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 			#if USE_HALF_PRECISION_IN_FEATURES_DATA
 			featuresCache[featuresCacheOffset] = features_buffer[featureOffset];
@@ -941,7 +939,7 @@ __global__ void new_fitter(
 			#endif
 		}
 	}
-	#endif
+	#endif // USE_FEATURES_VGPR_CACHE
 
 	// Compute R
 	for(int col = 0; col < limit; col++)
@@ -953,17 +951,16 @@ __global__ void new_fitter(
 		const int featureIndex = col;
 
 		#if USE_FEATURES_VGPR_CACHE
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+		const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
 		#else
-		const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
+		const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
 		#endif
 
 		float tmp_sum_value = 0.f;
 
-		// Manual unrolling for parallel reduction as the block contains 1024 (32x32) work items and
-		// the reduction operates on 256 elements (group size)
-		// -> Compute the sum of N values (N = 1024/256 = 4)
-		for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
+		// Manual unrolling for parallel reduction in case NumValuesInBlock is greater than LocalSize
+		// as the reduction operates on LocalSize elements.
+		for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
 		{
 			// Load feature
 			#if USE_FEATURES_VGPR_CACHE
@@ -974,12 +971,12 @@ __global__ void new_fitter(
 				float tmp = featuresCache[featuresCacheOffset];
 				#endif
 			#else
-				const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+				const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
 				float tmp = load_feature(features_buffer, featureOffset);
 			#endif
 
 			// Store the feature in shared memory
-			const int index = subVector * LOCAL_SIZE + threadId;
+			const int index = subVector * LocalSize + threadId;
 			u_vec[index] = tmp;
 
 			if(index >= col_limited + 1)
@@ -990,9 +987,9 @@ __global__ void new_fitter(
 		SyncThreads();
 
 		// Find length of vector in A's column with reduction sum function
-		pr_data_256[threadId] = tmp_sum_value;
+		pSharedData[threadId] = tmp_sum_value;
 		SyncThreads();
-		parallel_reduction_sum_256(&vec_length, pr_data_256, threadId);
+		parallel_reduction_sum<LocalSize>(&vec_length, pSharedData, threadId);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
 		// initially wanted col_limited is used to select wich work-item runs which branch
@@ -1032,24 +1029,24 @@ __global__ void new_fitter(
 		for(int featureIndex = col_limited+1; featureIndex < BUFFER_COUNT; ++featureIndex)
 		{
 			#if USE_FEATURES_VGPR_CACHE
-			const unsigned int baseFeaturesCacheOffset = featureIndex * (BLOCK_PIXELS / LOCAL_SIZE);
+			const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
 			#else
-			const unsigned int baseFeatureOffset = featureIndex * BLOCK_PIXELS + threadFeaturesBuffersOffset;
+			const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
 			#endif
 
-			const unsigned int baseFeatureSeed = featureIndex * BLOCK_PIXELS + baseSeed;
+			const unsigned int baseFeatureSeed = featureIndex * NumValuesInBlock + baseSeed;
 
 			// Starts by computing dot product with reduction sum function
 			#if CACHE_TMP_DATA
 			// No need to load features_buffer twice because each work-item first copies value for
 			// dot product computation and then modifies the same value
-			float tmp_data_private_cache[BLOCK_PIXELS / LOCAL_SIZE];
+			float tmp_data_private_cache[NumValuesInBlock / LocalSize];
 			#endif
 
 			float tmp_sum_value = 0.f;
-			for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
+			for(int subVector = 0; subVector < NumValuesInBlock / LocalSize; ++subVector)
 			{
-				const int index = subVector * LOCAL_SIZE + threadId;
+				const int index = subVector * LocalSize + threadId;
 				if(index >= col_limited)
 				{
 					// Load feature
@@ -1062,7 +1059,7 @@ __global__ void new_fitter(
 						float tmp = featuresCache[featuresCacheOffset];
 						#endif
 					#else
-						const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+						const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
 						float tmp = load_feature(features_buffer, featureOffset);
 					#endif
 
@@ -1072,7 +1069,7 @@ __global__ void new_fitter(
 					// Note: does not Add noise to constant buffer (column 0) and noisy image data (last 3 columns).
 					if(col == 0 && featureIndex < BUFFER_COUNT - 3)
 					{
-						const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
+						const int seed = subVector * LocalSize + baseFeatureSeed;
 						tmp += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
 					}
 
@@ -1083,23 +1080,23 @@ __global__ void new_fitter(
 				}
 			}
 
-			pr_data_256[threadId] = tmp_sum_value;
+			pSharedData[threadId] = tmp_sum_value;
 			SyncThreads();
-			parallel_reduction_sum_256(&dotProd, pr_data_256, threadId);
+			parallel_reduction_sum<LocalSize>(&dotProd, pSharedData, threadId);
 
 			const float dotFactor = 2.0f * dotProd / u_length_squared;
 
-			// Manual unrolling as the block contains 1024 (32x32) work items and we operate on 256 elements (group size)
-			// -> Compute the sum of N values (N = 1024/256 = 4)
-			for(int subVector = 0; subVector < BLOCK_PIXELS / LOCAL_SIZE; ++subVector)
+			// Manual unrolling for parallel reduction in case NumValuesInBlock is greater than LocalSize
+			// as the reduction operates on LocalSize elements.
+			for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
 			{
-				const int index = subVector * LOCAL_SIZE + threadId;
+				const int index = subVector * LocalSize + threadId;
 				if(index >= col_limited)
 				{
 					#if USE_FEATURES_VGPR_CACHE
 					const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 					#else
-					const unsigned int featureOffset = subVector * LOCAL_SIZE + baseFeatureOffset;
+					const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
 					#endif
 
 					#if CACHE_TMP_DATA
@@ -1114,7 +1111,7 @@ __global__ void new_fitter(
 						#else
 							float store_value = load_feature(features_buffer, featureOffset);
 						#endif
-					const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
+					const int seed = subVector * LocalSize + baseFeatureSeed;
 					store_value += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
 					#endif 
 
@@ -1234,11 +1231,33 @@ extern "C" void run_new_fitter(
 	#endif
 )
 {
-	new_fitter<<<grid_size, block_size>>>(
-		params,
-		weights,
-		features_buffer
-	);
+	switch(params.kernelLocalSize)
+	{
+		case 256:
+		{
+			switch(params.fitterBlockSize)
+			{
+				case 16: template_fitter<16 * 16, 256><<<grid_size, block_size>>>(params, weights, features_buffer); break;
+				case 32: template_fitter<32 * 32, 256><<<grid_size, block_size>>>(params, weights, features_buffer); break;
+				case 64: template_fitter<64 * 64, 256><<<grid_size, block_size>>>(params, weights, features_buffer); break;
+				default: break;
+			}
+			break;
+		}
+
+		case 1024:
+		{
+			switch(params.fitterBlockSize)
+			{
+				case 32: template_fitter<32 * 32, 1024><<<grid_size, block_size>>>(params, weights, features_buffer); break;
+				case 64: template_fitter<64 * 64, 1024><<<grid_size, block_size>>>(params, weights, features_buffer); break;
+				default: break;
+			}
+			break;
+		}
+
+		default: break;
+	}
 }
 
 
@@ -1625,8 +1644,8 @@ __global__ void new_weighted_sum(
 	const int linear_pixel = pixel.y * w + pixel.x;
 
 	// Retrieve linear group index from the offset pixel
-	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords(pixel, ivec2(params.blockSize), params.frameNumber);
-	const int group_index = (offset_pixel.x / params.blockSize) + (offset_pixel.y / params.blockSize) * params.worksetWithMarginBlockCountX;
+	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords(pixel, ivec2(params.fitterBlockSize), params.frameNumber);
+	const int group_index = (offset_pixel.x / params.fitterBlockSize) + (offset_pixel.y / params.fitterBlockSize) * params.worksetWithMarginBlockCountX;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
 	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)

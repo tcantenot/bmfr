@@ -194,7 +194,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		(worksetHeightWithMargin + k_rescale_world_pos_block_size.y - 1) / k_rescale_world_pos_block_size.y
 	);
 
-	const unsigned int FitterBlockSize = BLOCK_EDGE_LENGTH;
+	const unsigned int fitterBlockSize = BLOCK_EDGE_LENGTH;
 
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
@@ -233,7 +233,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		RescaleFeaturesParams rescaleWorldPosParams;
 		rescaleWorldPosParams.sizeX = w;
 		rescaleWorldPosParams.sizeY = h;
-		rescaleWorldPosParams.blockSize = FitterBlockSize;
+		rescaleWorldPosParams.fitterBlockSize = fitterBlockSize;
 		rescaleWorldPosParams.frameNumber = frame;
 
 		run_rescale_world_positions_pr(
@@ -263,7 +263,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		AccumulateNoisyDataKernelParams accNoisyDataParams;
 		accNoisyDataParams.sizeX = w;
 		accNoisyDataParams.sizeY = h;
-		accNoisyDataParams.blockSize = FitterBlockSize;
+		accNoisyDataParams.fitterBlockSize = fitterBlockSize;
 		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
 		accNoisyDataParams.frameNumber = frame;
 
@@ -345,6 +345,8 @@ int new_bmfr_cuda(TmpData & tmpData)
 		);
 
 		FitterKernelParams fitterParams;
+		fitterParams.kernelLocalSize = fitterLocalSize;
+		fitterParams.fitterBlockSize = fitterBlockSize;
 		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
 		fitterParams.frameNumber = frame;
 
@@ -386,7 +388,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		WeightedSumKernelParams weightedSumParams;
 		weightedSumParams.sizeX = w;
 		weightedSumParams.sizeY = h;
-		weightedSumParams.blockSize = FitterBlockSize;
+		weightedSumParams.fitterBlockSize = fitterBlockSize;
 		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
 		weightedSumParams.frameNumber = frame;
 

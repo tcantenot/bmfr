@@ -239,3 +239,49 @@ inline __device__ void parallel_reduction_sum_1024(
 	parallel_reduction_sum_256(result, shared_1024, index);
 }
 
+
+
+template <unsigned int Size>
+inline __device__ void parallel_reduction_min(
+	float * __restrict__ result,
+	float * __restrict__ shared,
+	const unsigned int index
+)
+{
+	switch(Size)
+	{
+		case 256:  parallel_reduction_min_256(result, shared, index);  break;
+		case 1024: parallel_reduction_min_1024(result, shared, index); break;
+		default: break;
+	}
+}
+
+template <unsigned int Size>
+inline __device__ void parallel_reduction_max(
+	float * __restrict__ result,
+	float * __restrict__ shared,
+	const unsigned int index
+)
+{
+	switch(Size)
+	{
+		case 256:  parallel_reduction_max_256(result, shared, index);  break;
+		case 1024: parallel_reduction_max_1024(result, shared, index); break;
+		default: break;
+	}
+}
+
+template <unsigned int Size>
+inline __device__ void parallel_reduction_sum(
+	float * __restrict__ result,
+	float * __restrict__ shared,
+	const unsigned int index
+)
+{
+	switch(Size)
+	{
+		case 256:  parallel_reduction_sum_256(result, shared, index);  break;
+		case 1024: parallel_reduction_sum_1024(result, shared, index); break;
+		default: break;
+	}
+}
