@@ -1,200 +1,10 @@
 #pragma once
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
-
 #include "config.hpp"
 
-////////////////////////////////////////////////////////////////////////////////
-// TODO replace: Placeholders
+#include "config.cuh"
+#include "math.cuh"
 
-template <typename T>
-inline __device__ T Min(T lhs, T rhs) {	return lhs < rhs ? lhs : rhs; }
-
-template <typename T>
-inline __device__ T Max(T lhs, T rhs) {	return lhs < rhs ? rhs : lhs; }
-
-template <typename T>
-inline __device__ T Clamp(T x, T a, T b) { return Max(Min(x, b), a); }
-
-template <typename T>
-inline __device__ T Saturate(T x) { return Clamp(x, T(0), T(1)); }
-
-template <typename T>
-inline __device__ T Sqrt(T x) { return sqrt(x); }
-
-template <typename T>
-struct tvec2
-{
-	T x, y;
-
-	__device__ explicit tvec2(T v = T(0)): x(v), y(v) { }
-	__device__ tvec2(T xx, T yy): x(xx), y(yy) { }
-	template <typename U>
-	__device__ tvec2(tvec2<U> const & o): x(o.x), y(o.y) { }
-	__device__ tvec2(float2 const & o): x(o.x), y(o.y) { }
-	__device__ tvec2 operator+(tvec2 const & o) const { return tvec2(x + o.x, y + o.y); }
-	__device__ tvec2 operator-(tvec2 const & o) const { return tvec2(x - o.x, y - o.y); }
-	__device__ tvec2 operator*(tvec2 const & o) const { return tvec2(x * o.x, y * o.y); }
-
-	__device__ tvec2 operator+() const { return tvec2(+x,+ y); }
-	__device__ tvec2 operator-() const { return tvec2(-x, -y); }
-
-	__device__ tvec2 const & operator-=(tvec2<T> const & v) { x -= v.x; y -= v.y; return *this; }
-
-	__device__ tvec2 const & operator+=(T v) { x += v; y += v; return *this; }
-	__device__ tvec2 const & operator*=(T v) { x *= v; y *= v; return *this; }
-	__device__ tvec2 const & operator/=(T v) { x /= v; y /= v; return *this; }
-};
-
-template <typename T>
-inline __device__ tvec2<T> operator+(tvec2<T> const & l, tvec2<T> const & r) { return tvec2<T>(l.x + r.x, l.y + r.y); }
-
-template <typename T>
-inline __device__ tvec2<T> operator-(tvec2<T> const & l, tvec2<T> const & r) { return tvec2<T>(l.x - r.x, l.y - r.y); }
-
-template <typename T>
-inline __device__ tvec2<T> operator-(T x, tvec2<T> const & v) {	return tvec2<T>(x - v.x, x - v.y); }
-
-template <typename T>
-inline __device__ tvec2<T> operator-(tvec2<T> const & v, T x) {	return tvec2<T>(v.x - x, v.y - x); }
-
-template <typename T>
-inline __device__ tvec2<T> operator+(tvec2<T> const & v, T x) {	return tvec2<T>(v.x + x, v.y + x); }
-
-
-using ivec2 = tvec2<int>;
-using vec2 = tvec2<float>;
-
-
-template <typename T>
-struct tcvec3
-{
-	T x, y, z;
-};
-
-using cvec3 = tcvec3<float>;
-
-template <typename T>
-struct tvec3 : public tcvec3<T>
-{
-	__device__ explicit tvec3(T v = T(0)) { x = v; y = v; z = v; }
-	__device__ tvec3(T xx, T yy, T zz) { x = xx; y = yy; z = zz; }
-	__device__ tvec3(tcvec3<T> const & o) { x = o.x; y = o.y; z = o.z; }
-	__device__ tvec3 & operator=(tvec3 const & o) { x = o.x; y = o.y; z = o.z; return *this; }
-	__device__ tvec3 operator+(tvec3 const & o) const { return tvec3(x + o.x, y + o.y, z + o.z); }
-	__device__ tvec3 operator-(tvec3 const & o) const { return tvec3(x - o.x, y - o.y, z - o.z); }
-	__device__ tvec3 operator*(tvec3 const & o) const { return tvec3(x * o.x, y * o.y, z * o.z); }
-
-	__device__ tvec3 const & operator+=(tvec3 const & o) { x += o.x; y += o.y; z += o.z; return *this; }
-
-	__device__ tvec3 const & operator/=(T v) { x /= v; y /= v; z /= v; return *this; }
-
-	__device__ tvec3 operator/(tvec3<T> const & v) { return tvec3<T>(x / v.x, y / v.y, z / v.z); }
-};
-
-template <typename T>
-inline __device__ tvec3<T> operator*(T x, tvec3<T> const & v) {	return tvec3<T>(x * v.x, x * v.y, x * v.z); }
-
-template <typename T>
-inline __device__ tvec3<T> operator*(tvec3<T> const & v, T x) {	return tvec3<T>(x * v.x, x * v.y, x * v.z); }
-
-template <typename T>
-inline __device__ tvec3<T> operator/(tvec3<T> const & v, T x) {	return tvec3<T>(v.x / x, v.y / x, v.z / x); }
-
-
-template <typename T>
-inline __device__ tvec3<T> Min(tvec3<T> const & l, tvec3<T> const & r)
-{
-	return tvec3<T>(Min(l.x, r.x), Min(l.y, r.y), Min(l.z, r.z));
-}
-
-template <typename T>
-inline __device__ tvec3<T> Max(tvec3<T> const & l, tvec3<T> const & r)
-{
-	return tvec3<T>(Max(l.x, r.x), Max(l.y, r.y), Max(l.z, r.z));
-}
-
-template <typename T>
-inline __device__ tvec3<T> Clamp(tvec3<T> const & v, tvec3<T> const & a, tvec3<T> const & b)
-{
-	return tvec3<T>(Clamp(v.x, a.x, b.x), Clamp(v.y, a.y, b.y), Clamp(v.z, a.z, b.z));
-}
-
-template <typename T>
-inline __device__ tvec3<T> Pow(tvec3<T> const & v, T p)
-{
-	return tvec3<T>(pow(v.x, p), pow(v.y, p), pow(v.z, p));
-}
-
-template <typename T>
-inline __device__ T Lerp(T a, T b, T t)
-{
-	return (T(1) - t) * a + t * b;
-}
-
-template <typename T>
-inline __device__ tvec3<T> Lerp(tvec3<T> const & a, tvec3<T> const & b, tvec3<T> const & t)
-{
-	return tvec3<T>(Lerp(a.x, b.x, t.x), Lerp(a.y, b.y, t.y), Lerp(a.z, b.z, t.z));
-}
-
-template <typename T>
-inline __device__ tvec3<T> Lerp(tvec3<T> const & a, tvec3<T> const & b, T t)
-{
-	return tvec3<T>(Lerp(a.x, b.x, t), Lerp(a.y, b.y, t), Lerp(a.z, b.z, t));
-}
-
-using ivec3 = tvec3<int>;
-using vec3 = tvec3<float>;
-
-template <typename T>
-inline __device__ T Dot(tvec3<T> const & lhs, tvec3<T> const & rhs) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z; }
-
-template <typename T>
-struct tcvec4
-{
-	T x, y, z, w;
-};
-
-using cvec4 = tcvec4<float>;
-
-template <typename T>
-struct tvec4 : public tcvec4<T>
-{
-	__device__ explicit tvec4(T v = T(0)) { x = v; y = v; z = v; w = v; }
-	__device__ tvec4(T xx, T yy, T zz, T ww) { x = xx; y = yy; z = zz; w = ww; }
-	__device__ tvec4(tvec3<T> const & v, T ww) { x = v.x; y = v.y; z = v.z; w = ww; }
-	__device__ tvec4(tcvec4<T> const & o) { x = o.x; y = o.y; z = o.z; w = o.w; }
-	__device__ tvec4 operator+(tvec4 const & o) const { return tvec4(x + o.x, y + o.y, z + o.z, w + o.w); }
-	__device__ tvec4 operator-(tvec4 const & o) const { return tvec4(x - o.x, y - o.y, z - o.z, w - o.w); }
-
-	__device__ T operator[](int i) const { return *((&x) + i); }
-
-	__device__ tvec3<T> xyz() const { return tvec3<T>(x, y, z); }
-};
-
-using ivec4 = tvec4<int>;
-using vec4 = tvec4<float>;
-
-template <typename T>
-struct tmat4x4
-{
-	tvec4<T> m[4]; // Column major
-	__device__ tvec4<T> row(int i) const { return tvec4<T>(m[0][i], m[1][i], m[2][i], m[3][i]); }
-	__device__ tvec4<T> const & operator[](int i) const { return m[i]; }
-};
-
-using mat4x4 = tmat4x4<float>;
-
-template <typename T>
-inline __device__ T Dot(tvec4<T> const & lhs, tvec4<T> const & rhs) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z + lhs.w*rhs.w; }
-
-template <typename T>
-inline __device__ T Abs(T x) { return x < 0 ? -x : x; }
-
-#define C_FLT_MAX INFINITY
 
 // NOTE: if you want to use other than normal and world_position data you have to make
 // it available in the first accumulation kernel and in the weighted sum kernel
@@ -263,80 +73,6 @@ inline __device__ void GlobalMemFence()
 	__syncthreads();
 }
 
-// Parallel reductions /////////////////////////////////////////////////////////
-
-// Unrolled parallel sum reduction of 256 values
-// TODO: unused start_index...
-inline __device__ void parallel_reduction_sum_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256, const int start_index)
-{
-	const int id = threadIdx.x;
-
-	if(id < 64)
-		pr_data_256[id] += pr_data_256[id + 64] + pr_data_256[id + 128] + pr_data_256[id + 192];
-	SyncThreads();
-
-	if(id < 8)
-		pr_data_256[id] += pr_data_256[id + 8]  + pr_data_256[id + 16] + pr_data_256[id + 24] +
-						   pr_data_256[id + 32] + pr_data_256[id + 40] + pr_data_256[id + 48] + pr_data_256[id + 56];
-	SyncThreads();
-
-	if(id == 0)
-	{
-		*result = pr_data_256[0] + pr_data_256[1] + pr_data_256[2] + pr_data_256[3] +
-				  pr_data_256[4] + pr_data_256[5] + pr_data_256[6] + pr_data_256[7];
-	}
-	SyncThreads();
-}
-
-// TODO: replace by Min4
-// Unrolled parallel min reduction of 256 values
-inline __device__ void parallel_reduction_min_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256)
-{
-	const int id = threadIdx.x;
-
-	if(id < 64)
-		pr_data_256[id] = Min(Min(Min(pr_data_256[id], pr_data_256[id + 64]), pr_data_256[id + 128]), pr_data_256[id + 192]);
-	SyncThreads();
-
-	if(id < 8)
-		pr_data_256[id] = Min(Min(Min(Min(Min(Min(Min(pr_data_256[id], pr_data_256[id + 8]),
-			pr_data_256[id + 16]), pr_data_256[id + 24]), pr_data_256[id + 32]), pr_data_256[id + 40]),
-			pr_data_256[id + 48]), pr_data_256[id + 56]);
-	SyncThreads();
-
-	if(id == 0)
-	{
-		*result = Min(Min(Min(Min(Min(Min(Min(pr_data_256[0], pr_data_256[1]), pr_data_256[2]),
-			pr_data_256[3]), pr_data_256[4]), pr_data_256[5]), pr_data_256[6]), pr_data_256[7]);
-	}
-	SyncThreads();
-}
-
-// TODO: replace by Max4
-// Unrolled parallel max reduction of 256 values
-inline __device__ void parallel_reduction_max_256(float * K_RESTRICT result, float * K_RESTRICT pr_data_256)
-{
-   const int id = threadIdx.x;
-
-	if(id < 64)
-		pr_data_256[id] = Max(Max(Max(pr_data_256[id], pr_data_256[id + 64]), pr_data_256[id + 128]), pr_data_256[id + 192]);
-	SyncThreads();
-
-	if(id < 8)
-		pr_data_256[id] = Max(Max(Max(Max(Max(Max(Max(pr_data_256[id], pr_data_256[id + 8]),
-			pr_data_256[id + 16]), pr_data_256[id + 24]), pr_data_256[id + 32]), pr_data_256[id + 40]),
-			pr_data_256[id + 48]), pr_data_256[id + 56]);
-	SyncThreads();
-
-	if(id == 0)
-	{
-		*result = Max(Max(Max(Max(Max(Max(Max(pr_data_256[0], pr_data_256[1]), pr_data_256[2]),
-			pr_data_256[3]), pr_data_256[4]), pr_data_256[5]), pr_data_256[6]), pr_data_256[7]);
-	}
-	SyncThreads();
-}
-
-
 // Block offset contants ///////////////////////////////////////////////////////
 
 // TODO: send as constant or define
@@ -344,7 +80,7 @@ inline __device__ void parallel_reduction_max_256(float * K_RESTRICT result, flo
 
 // TODO: try to cycle through all offsets using Bayer matrix
 #define BLOCK_OFFSETS_COUNT 16
-__device__ __constant__ float2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
+__device__ __constant__ icvec2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
 	{ -14, -14 },
 	{   4,  -6 },
 	{  -8,  14 },
@@ -614,6 +350,7 @@ struct AccumulateNoisyDataKernelParams
 {
 	unsigned int sizeX;
 	unsigned int sizeY;
+	unsigned int blockSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
 };
@@ -670,6 +407,7 @@ struct WeightedSumKernelParams
 {
 	unsigned int sizeX;
 	unsigned int sizeY;
+	unsigned int blockSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
 };

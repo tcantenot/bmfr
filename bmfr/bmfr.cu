@@ -1,4 +1,5 @@
 #include "bmfr.cuh"
+#include "reduction.cuh"
 
 
 #define WORLD_SCALE_SQR_OPTIM 0
@@ -411,12 +412,12 @@ __global__ void fitter(
 		// Parallel min reduction
 		pr_data_256[threadId] = tmp_min;
 		SyncThreads();
-		parallel_reduction_min_256(&block_min, pr_data_256);
+		parallel_reduction_min_256(&block_min, pr_data_256, threadId);
 
 		// Parallel max reduction
 		pr_data_256[threadId] = tmp_max;
 		SyncThreads();
-		parallel_reduction_max_256(&block_max, pr_data_256);
+		parallel_reduction_max_256(&block_max, pr_data_256, threadId);
 
 		// Output the min and max features values per block of 32x32 pixels (only output 256 values because of manual unrolling of 4)
 		if(threadId == 0)
@@ -497,7 +498,7 @@ __global__ void fitter(
 		// Find length of vector in A's column with reduction sum function
 		pr_data_256[threadId] = tmp_sum_value;
 		SyncThreads();
-		parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
+		parallel_reduction_sum_256(&vec_length, pr_data_256, threadId);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
 		// initially wanted col_limited is used to select wich work-item runs which branch
@@ -575,7 +576,7 @@ __global__ void fitter(
 
 			pr_data_256[threadId] = tmp_sum_value;
 			SyncThreads();
-			parallel_reduction_sum_256(&dotProd, pr_data_256, col_limited);
+			parallel_reduction_sum_256(&dotProd, pr_data_256, threadId);
 
 			const float dotFactor = 2.0f * dotProd / u_length_squared;
 

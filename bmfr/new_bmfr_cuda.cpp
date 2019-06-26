@@ -6,6 +6,29 @@
 #include <functional>
 
 
+// TODO:
+// Some ideas from https://openimagedenoise.github.io/documentation.html
+// - for the albedo, use the albedo of the first diffuse or glossy surface hit
+//  -> follow perfect specular (delta) paths
+//   => improve the quality of reflections and transmission
+//
+// For metallic surfaces the albedo should be either the reflectivity at normal incidence (e.g. from the artist
+// friendly metallic Fresnel model) or the average reflectivity; or if these are constant (not textured) or
+// unknown, the albedo can be simply 1 as well.
+// 
+// The albedo for dielectric surfaces (e.g. glass) should be either 1 or, if the surface is perfect specular
+// (i.e. has a delta BSDF), the Fresnel blend of the reflected and transmitted albedos.
+// The latter usually works better but only if it does not introduce too much additional noise due to random sampling.
+// Thus we recommend to split the path into a reflected and a transmitted path at the first hit, and perhaps fall back to
+// an albedo of 1 for subsequent dielectric hits, to avoid noise. The reflected albedo in itself can be used for mirror-like
+// surfaces as well.
+// 
+// The albedo for layered surfaces can be computed as the weighted sum of the albedos of the individual layers.
+// Non-absorbing clear coat layers can be simply ignored (or the albedo of the perfect specular reflection can be used as well)
+// but absorption should be taken into account.
+//
+// - try to accumulate auxiliary feature buffers with the same reconstruction filter as the 1spp
+
 void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h, size_t features_count)
 {
 	size_t cudaBufferTotalSize = 0;
@@ -171,6 +194,8 @@ int new_bmfr_cuda(TmpData & tmpData)
 		(worksetHeightWithMargin + k_rescale_world_pos_block_size.y - 1) / k_rescale_world_pos_block_size.y
 	);
 
+	const unsigned int FitterBlockSize = BLOCK_EDGE_LENGTH;
+
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
 	const dim3 k_workset_with_margin_grid_size((worksetWidthWithMargin + k_block_size.x - 1) / k_block_size.x, (worksetHeightWithMargin + k_block_size.y - 1) / k_block_size.y);
@@ -208,6 +233,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		RescaleFeaturesParams rescaleWorldPosParams;
 		rescaleWorldPosParams.sizeX = w;
 		rescaleWorldPosParams.sizeY = h;
+		rescaleWorldPosParams.blockSize = FitterBlockSize;
 		rescaleWorldPosParams.frameNumber = frame;
 
 		run_rescale_world_positions_pr(
@@ -237,6 +263,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		AccumulateNoisyDataKernelParams accNoisyDataParams;
 		accNoisyDataParams.sizeX = w;
 		accNoisyDataParams.sizeY = h;
+		accNoisyDataParams.blockSize = FitterBlockSize;
 		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
 		accNoisyDataParams.frameNumber = frame;
 
@@ -359,6 +386,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		WeightedSumKernelParams weightedSumParams;
 		weightedSumParams.sizeX = w;
 		weightedSumParams.sizeY = h;
+		weightedSumParams.blockSize = FitterBlockSize;
 		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
 		weightedSumParams.frameNumber = frame;
 

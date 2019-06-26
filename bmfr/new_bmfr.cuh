@@ -18,6 +18,7 @@ struct RescaleFeaturesParams
 {
 	unsigned int sizeX;
 	unsigned int sizeY;
+	unsigned int blockSize;
 	unsigned int frameNumber;
 };
 

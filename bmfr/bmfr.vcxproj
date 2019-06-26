@@ -223,12 +223,15 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="..\bmfr\bmfr_c_opencl.hpp" />
     <ClInclude Include="..\bmfr\CLUtils\CLUtils.hpp" />
     <ClInclude Include="BandwidthTests.hpp" />
+    <ClInclude Include="config.cuh" />
     <ClInclude Include="config.hpp" />
     <ClInclude Include="cuda_helpers.hpp" />
     <ClInclude Include="IntelOpenImageDenoiser.hpp" />
+    <ClInclude Include="math.cuh" />
     <ClInclude Include="new_bmfr.cuh" />
     <ClInclude Include="new_bmfr_cuda.hpp" />
     <ClInclude Include="opencl_helpers.hpp" />
+    <ClInclude Include="reduction.cuh" />
     <ClInclude Include="utils.hpp" />
   </ItemGroup>
   <ItemGroup>

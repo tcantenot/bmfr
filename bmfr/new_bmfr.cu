@@ -1,17 +1,15 @@
 #include "new_bmfr.cuh"
+#include "math.cuh"
+#include "reduction.cuh"
 
 // TODO
 // - Try to pass everything as half (inputs and outputs)
 //   --> #define WorldPositionType|WorldNormals|... float or half
 // - LoadWorldPositions, LoadWorldNormals, ...
-// - PixelCoordsToShiftedPixelCoords(pixelCoords, frameNumber, w, h) -> pixelCoords - BLOCK_EDGE_HALF + BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];
-// - ShiftedPixelCoordsToPixelCoords(shiftedPixelCoords, frameNumber, w, h) -> shiftedPixelCoords + BLOCK_EDGE_HALF - BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
 #define NORMALIZE_FEATURES_USING_4_BLOCKS 0
 #define USE_FEATURES_VGPR_CACHE USE_HALF_PRECISION_IN_FEATURES_DATA
 
-
-#define K_SUPPORT_HALF16_ARITHMETIC (__CUDA_ARCH__ >= 530)
 
 inline __device__ float Add(float lhs, float rhs) { return lhs + rhs; }
 inline __device__ float Sub(float lhs, float rhs) { return lhs - rhs; }
@@ -34,210 +32,6 @@ struct Converter<half>
 	static inline __device__ half Convert(half x)  { return x; }
 	static inline __device__ half Convert(float x) { return __float2half(x); }
 };
-
-inline __device__ half Add(half lhs, half rhs)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	return __hadd(lhs, rhs);
-	#else
-	return __float2half(__half2float(lhs) + __half2float(rhs));
-	#endif
-}
-
-inline __device__ void Add3(half const * lhs, half const * rhs, half * res)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	half2 tmp = __hadd2(__halves2half2(lhs[0], lhs[1]), __halves2half2(rhs[0], rhs[1]));
-	res[0] = __low2half(tmp);
-	res[1] = __high2half(tmp);
-	res[2] = __hadd(lhs[2], rhs[2]);
-	#else
-	res[0] = __float2half(__half2float(lhs[0]) + __half2float(rhs[0]));
-	res[1] = __float2half(__half2float(lhs[1]) + __half2float(rhs[1]));
-	res[2] = __float2half(__half2float(lhs[2]) + __half2float(rhs[2]));
-	#endif
-}
-
-inline __device__ void Add(half lhs[3], half rhs[3], half res[3])
-{
-	Add3(lhs, rhs, res);
-}
-
-inline __device__ half Sub(half lhs, half rhs)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	return __hsub(lhs, rhs);
-	#else
-	return __float2half(__half2float(lhs) - __half2float(rhs));
-	#endif
-}
-
-inline __device__ void Sub3(half const * lhs, half const * rhs, half * res)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	half2 tmp = __hsub2(__halves2half2(lhs[0], lhs[1]), __halves2half2(rhs[0], rhs[1]));
-	res[0] = __low2half(tmp);
-	res[1] = __high2half(tmp);
-	res[2] = __hsub(lhs[2], rhs[2]);
-	#else
-	res[0] = __float2half(__half2float(lhs[0]) - __half2float(rhs[0]));
-	res[1] = __float2half(__half2float(lhs[1]) - __half2float(rhs[1]));
-	res[2] = __float2half(__half2float(lhs[2]) - __half2float(rhs[2]));
-	#endif
-}
-
-inline __device__ void Sub(half lhs[3], half rhs[3], half res[3])
-{
-	Sub3(lhs, rhs, res);
-}
-
-inline __device__ half Mul(half lhs, half rhs)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	return __hmul(lhs, rhs);
-	#else
-	return __float2half(__half2float(lhs) * __half2float(rhs));
-	#endif
-}
-
-inline __device__ void Mul3(half const * lhs, half const * rhs, half * res)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	half2 tmp = __hmul2(__halves2half2(lhs[0], lhs[1]), __halves2half2(rhs[0], rhs[1]));
-	res[0] = __low2half(tmp);
-	res[1] = __high2half(tmp);
-	res[2] = __hmul(lhs[2], rhs[2]);
-	#else
-	res[0] = __float2half(__half2float(lhs[0]) * __half2float(rhs[0]));
-	res[1] = __float2half(__half2float(lhs[1]) * __half2float(rhs[1]));
-	res[2] = __float2half(__half2float(lhs[2]) * __half2float(rhs[2]));
-	#endif
-}
-
-inline __device__ void Mul(half lhs[3], half rhs[3], half res[3])
-{
-	Mul3(lhs, rhs, res);
-}
-
-inline __device__ half Div(half lhs, half rhs)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	return __hdiv(lhs, rhs);
-	#else
-	return __float2half(__half2float(lhs) / __half2float(rhs));
-	#endif
-}
-
-inline __device__ void Div3(half const * lhs, half const * rhs, half * res)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	half2 tmp = __h2div(__halves2half2(lhs[0], lhs[1]), __halves2half2(rhs[0], rhs[1]));
-	res[0] = __low2half(tmp);
-	res[1] = __high2half(tmp);
-	res[2] = __hdiv(lhs[2], rhs[2]);
-	#else
-	res[0] = __float2half(__half2float(lhs[0]) / __half2float(rhs[0]));
-	res[1] = __float2half(__half2float(lhs[1]) / __half2float(rhs[1]));
-	res[2] = __float2half(__half2float(lhs[2]) / __half2float(rhs[2]));
-	#endif
-}
-
-inline __device__ void Div(half lhs[3], half rhs[3], half res[3])
-{
-	Div3(lhs, rhs, res);
-}
-
-inline __device__ half Sqrt(half x)
-{
-	return __float2half(sqrt(__half2float(x)));
-}
-
-
-template <>
-struct tvec3<half> : public tcvec3<half>
-{
-	__device__ tvec3() { x = { 0 }; y = { 0 }; z = { 0 }; }
-	__device__ explicit tvec3(half v) { x = y = z = v; }
-	__device__ tvec3(half xx, half yy, half zz) { x = xx; y = yy; z = zz; }
-	__device__ tvec3 & operator=(tvec3 const & o) { x = o.x; y = o.y; z = o.z; return *this; }
-	__device__ tvec3 operator+(tvec3 const & o) const { tvec3 v; Add3(&x, &o.x, &v.x); return v; }
-	__device__ tvec3 operator-(tvec3 const & o) const { tvec3 v; Sub3(&x, &o.x, &v.x); return v; }
-	__device__ tvec3 operator*(tvec3 const & o) const { tvec3 v; Mul3(&x, &o.x, &v.x); return v; }
-	__device__ tvec3 operator/(tvec3 const & o) const { tvec3 v; Div3(&x, &o.x, &v.x); return v; }
-
-	__device__ tvec3 const & operator+=(tvec3 const & o) { Add3(&x, &o.x, &x); return *this; }
-	__device__ tvec3 const & operator-=(tvec3 const & o) { Sub3(&x, &o.x, &x); return *this; }
-	__device__ tvec3 const & operator*=(tvec3 const & o) { Mul3(&x, &o.x, &x); return *this; }
-	__device__ tvec3 const & operator/=(tvec3 const & o) { Div3(&x, &o.x, &x); return *this; }
-
-	__device__ tvec3 const & operator+=(half v) { half vv[3] = { v, v, v }; Add3(&x, vv, &x); return *this; }
-	__device__ tvec3 const & operator-=(half v) { half vv[3] = { v, v, v }; Sub3(&x, vv, &x); return *this; }
-	__device__ tvec3 const & operator*=(half v) { half vv[3] = { v, v, v }; Mul3(&x, vv, &x); return *this; }
-	__device__ tvec3 const & operator/=(half v) { half vv[3] = { v, v, v }; Div3(&x, vv, &x); return *this; }
-};
-
-template <>
-struct tvec4<half> : public tcvec4<half>
-{
-	__device__ tvec3<half> xyz() const { return tvec3<half>(x, y, z); }
-};
-
-using vec3h = tvec3<half>;
-using vec4h = tvec4<half>;
-
-inline __device__ half Lerp(half a, half b, half t)
-{
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	half one_minus_t = __hsub(__float2half(1.0f), t);
-	half2 partial_sums = __hmul2(__halves2half2(one_minus_t, t), __halves2half2(a, b));
-	return __hadd(__low2half(partial_sums), __high2half(partial_sums));
-	#else
-	float ft = __half2float(t);
-	float fa = __half2float(a);
-	float fb = __half2float(b);
-	return __float2half((1.0f - ft) * fa + ft * fb);
-	#endif
-}
-
-// TODO: benchmark
-inline __device__ vec3h Lerp(vec3h const & a, vec3h const & b, vec3h const & t)
-{
-	#if 0
-	half h1 = __float2half(1.0f);
-
-	half2 one_minus_t_xy = __hsub2(__halves2half2(h1, t.x), __halves2half2(h1, t.y));
-	half2 lhs_xy = __hmul2(one_minus_t_xy, __halves2half2(a.x, a.y));
-	half2 rhs_xy = __hmul2(__halves2half2(t.x, t.y), __halves2half2(b.x, b.y));
-	half2 res_xy = __hadd2(lhs_xy, rhs_xy);
-
-	half one_minus_t_z = __hsub(h1, t.z);
-	half2 partial_sums_z = __hmul2(__halves2half2(one_minus_t_z, t.z), __halves2half2(a.z, b.z));
-	half res_z = __hadd(__low2half(partial_sums_z), __high2half(partial_sums_z));
-
-	return vec3h(__low2half(res_xy), __high2half(res_xy), res_z);
-	#else
-	return vec3h(Lerp(a.x, b.x, t.x), Lerp(a.y, b.y, t.y), Lerp(a.z, b.z, t.z));
-	#endif
-}
-
-// TODO: benchmark
-inline __device__ vec3h Lerp(vec3h const & a, vec3h const & b, half t)
-{
-	#if 0
-	half one_minus_t = __hsub(__float2half(1.0f), t);
-
-	half2 lhs_xy = __hmul2(__halves2half2(one_minus_t, one_minus_t), __halves2half2(a.x, a.y));
-	half2 rhs_xy = __hmul2(__halves2half2(t, t), __halves2half2(b.x, b.y));
-	half2 res_xy = __hadd2(lhs_xy, rhs_xy);
-
-	half2 partial_sums_z = __hmul2(__halves2half2(one_minus_t, t), __halves2half2(a.z, b.z));
-	half res_z = __hadd(__low2half(partial_sums_z), __high2half(partial_sums_z));
-
-	return vec3h(__low2half(res_xy), __high2half(res_xy), res_z);
-	#else
-	return vec3h(Lerp(a.x, b.x, t), Lerp(a.y, b.y, t), Lerp(a.z, b.z, t));
-	#endif
-}
 
 
 template <typename In, typename Out>
@@ -365,6 +159,27 @@ inline __device__ void store_feature(half * buffer, unsigned int index, half val
 	buffer[index] = value;
 }
 
+
+inline __device__ ivec2 PixelCoordsToShiftedPixelCoords(
+	ivec2 const & pixelCoords,
+	ivec2 const & blockSize,
+	unsigned int frameNumber
+)
+{
+	const ivec2 halfBlockSize = blockSize / ivec2(2);
+	return pixelCoords - halfBlockSize + BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];// / ivec2(2); 
+}
+
+inline __device__ ivec2 ShiftedPixelCoordsToPixelCoords(
+	ivec2 const & pixelCoords,
+	ivec2 const & blockSize,
+	unsigned int frameNumber
+)
+{
+	const ivec2 halfBlockSize = blockSize / ivec2(2);
+	return pixelCoords + halfBlockSize - BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];// / ivec2(2);
+}
+
 // Compute features ////////////////////////////////////////////////////////////
 
 template <typename T, typename U, typename FeatureType>
@@ -402,57 +217,6 @@ inline __device__ void compute_features(
 
 // Rescale features ////////////////////////////////////////////////////////////
 
-inline __device__ void parallel_reduction_min_1024(
-	float * K_RESTRICT result,
-	float * K_RESTRICT pr_data_1024,
-	const unsigned int index
-)
-{
-	if(index < 256)
-	{
-		pr_data_1024[index] = Min(
-			Min(pr_data_1024[index], pr_data_1024[index + 256]),
-			Min(pr_data_1024[index + 512], pr_data_1024[index + 768])
-		);
-	}
-
-	SyncThreads();
-
-	parallel_reduction_min_256(result, pr_data_1024);
-}
-
-inline __device__ void parallel_reduction_max_1024(
-	float * K_RESTRICT result,
-	float * K_RESTRICT pr_data_1024,
-	const unsigned int index
-)
-{
-	if(index < 256)
-	{
-		pr_data_1024[index] = Max(
-			Max(pr_data_1024[index], pr_data_1024[index + 256]),
-			Max(pr_data_1024[index + 512], pr_data_1024[index + 768])
-		);
-	}
-
-	SyncThreads();
-
-	parallel_reduction_max_256(result, pr_data_1024);
-}
-
-inline __device__ void parallel_reduction_sum_1024(
-	float * K_RESTRICT result,
-	float * K_RESTRICT pr_data_1024,
-	const unsigned int index
-)
-{
-	if(index < 256)
-		pr_data_1024[index] += pr_data_1024[index + 256] + pr_data_1024[index + 512] + pr_data_1024[index + 768];
-	SyncThreads();
-
-	parallel_reduction_sum_256(result, pr_data_1024, 0);
-}
-
 __global__ void rescale_world_positions_pr(
 	RescaleFeaturesParams params,
 	float const * world_positions,
@@ -468,12 +232,8 @@ __global__ void rescale_world_positions_pr(
 	const int w = params.sizeX;
 	const int h = params.sizeY;
 
-	// Single block
 	#if !NORMALIZE_FEATURES_USING_4_BLOCKS
-	// Mirror indexed of the input. x and y are always less than one size out of
-	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
-	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 pixel_without_mirror = gtid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -512,7 +272,7 @@ __global__ void rescale_world_positions_pr(
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
 
 	#else // 4-blocks (not really a win in quality...)
-	const ivec2 offset = -ivec2(BLOCK_EDGE_HALF) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 offset = -ivec2(params.blockSize / 2) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
 	ivec2 offsets[4] =
 	{
@@ -576,9 +336,6 @@ __global__ void rescale_world_positions_pr(
 	   pixel_without_mirror.y >= 0 && pixel_without_mirror.y < h
 	)
 	{
-		//scaledX = Clamp(v.x / 15.0f, 0.f, 1.f);
-		//scaledY = Clamp(v.y / 15.0f, 0.f, 1.f);
-		//scaledZ = Clamp(v.z / 15.0f, 0.f, 1.f);
 		store3(normalized_world_positions, linear_pixel, vec3(scaledX, scaledY, scaledZ));
 	}
 }
@@ -616,10 +373,8 @@ __device__ void template_accumulate_noisy_data_frame0(
 	const int w = params.sizeX;
 	const int h = params.sizeY;
 
-	// Mirror indexed of the input. x and y are always less than one size out of
-	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
-	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 pixel_without_mirror = gtid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -649,15 +404,16 @@ __device__ void template_accumulate_noisy_data_frame0(
 	FeaturesType features[BUFFER_COUNT];
 	compute_features(normalized_world_position, normal, current_color, features);
 
-	const unsigned int x_block = gtid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
-	const unsigned int y_block = gtid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % BLOCK_EDGE_LENGTH; // Thread coordinate x inside block in [0, BLOCK_EDGE_LENGTH-1]
-	const unsigned int y_in_block = gtid.y % BLOCK_EDGE_LENGTH; // Thread coordinate y inside block in [0, BLOCK_EDGE_LENGTH-1]
+	const unsigned int x_block = gtid.x / params.blockSize; // Block coordinate x
+	const unsigned int y_block = gtid.y / params.blockSize; // Block coordinate y
+	const unsigned int x_in_block = gtid.x % params.blockSize; // Thread coordinate x inside block in [0, blockSize-1]
+	const unsigned int y_in_block = gtid.y % params.blockSize; // Thread coordinate y inside block in [0, blockSize-1]
 
-	const unsigned int features_base_offset = x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
-		x_block * BLOCK_PIXELS * BUFFER_COUNT +
+	const unsigned int numPixelsInBlock = params.blockSize * params.blockSize;
+	const unsigned int features_base_offset = x_in_block + y_in_block * params.blockSize +
+		x_block * numPixelsInBlock * BUFFER_COUNT +
 		y_block * params.worksetWithMarginBlockCountX *
-		BLOCK_PIXELS * BUFFER_COUNT;
+		numPixelsInBlock * BUFFER_COUNT;
 	
 	// TODO: change layout of features buffer to allow 128-bit loads?
 	// --> | Block 0 thread 0 feature 0 | Block 0 thread 0 feature 1 | ... | Block 0 thread 1 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
@@ -665,7 +421,7 @@ __device__ void template_accumulate_noisy_data_frame0(
 	{
 		// Offset in feature buffer (data are concatenated)
 		// | Block 0 thread 0 feature 0 | Block 0 thread 1 feature 0 | ... | Block 0 thread 0 feature M | ... | Block 1 thread 0 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-		const unsigned int featureOffset = features_base_offset + featureIndex * BLOCK_PIXELS;
+		const unsigned int featureOffset = features_base_offset + featureIndex * numPixelsInBlock;
 		store_feature(features_data, featureOffset, features[featureIndex]);
 	}
 
@@ -783,10 +539,8 @@ __device__ void template_accumulate_noisy_data(
 	const int w = params.sizeX;
 	const int h = params.sizeY;
 
-	// Mirror indexed of the input. x and y are always less than one size out of
-	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
-	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 pixel_without_mirror = gtid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.blockSize), params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -969,15 +723,19 @@ __device__ void template_accumulate_noisy_data(
 	FeaturesType features[BUFFER_COUNT];
 	compute_features(normalized_world_position, normal, new_color, features);
 
-	const unsigned int x_block = gtid.x / BLOCK_EDGE_LENGTH; // Block coordinate x
-	const unsigned int y_block = gtid.y / BLOCK_EDGE_LENGTH; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % BLOCK_EDGE_LENGTH; // Thread coordinate x inside block in [0, BLOCK_EDGE_LENGTH-1]
-	const unsigned int y_in_block = gtid.y % BLOCK_EDGE_LENGTH; // Thread coordinate y inside block in [0, BLOCK_EDGE_LENGTH-1]
+	const unsigned int x_block = gtid.x / params.blockSize; // Block coordinate x
+	const unsigned int y_block = gtid.y / params.blockSize; // Block coordinate y
+	const unsigned int x_in_block = gtid.x % params.blockSize; // Thread coordinate x inside block in [0, blockSize-1]
+	const unsigned int y_in_block = gtid.y % params.blockSize; // Thread coordinate y inside block in [0, blockSize-1]
 
-	const unsigned int features_base_offset = x_in_block + y_in_block * BLOCK_EDGE_LENGTH +
-		x_block * BLOCK_PIXELS * BUFFER_COUNT +
+	const unsigned int numPixelsInBlock = params.blockSize * params.blockSize;
+
+	// TODO: send constants so that:
+	// features_base_offset = x_in_block * params.featureOffsetScale0 + y_in_block * params.featureOffsetScale1;
+	const unsigned int features_base_offset = x_in_block + y_in_block * params.blockSize +
+		x_block * numPixelsInBlock * BUFFER_COUNT +
 		y_block * params.worksetWithMarginBlockCountX *
-		BLOCK_PIXELS * BUFFER_COUNT;
+		numPixelsInBlock * BUFFER_COUNT;
 	
 	// TODO: change layout of features buffer to allow 128-bit loads?
 	// --> | Block 0 thread 0 feature 0 | Block 0 thread 0 feature 1 | ... | Block 0 thread 1 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
@@ -985,7 +743,7 @@ __device__ void template_accumulate_noisy_data(
 	{
 		// Offset in feature buffer (data are concatenated)
 		// | Block 0 thread 0 feature 0 | Block 0 thread 1 feature 0 | ... | Block 0 thread 0 feature M | ... | Block 1 thread 0 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-		const unsigned int featureOffset = features_base_offset + featureIndex * BLOCK_PIXELS;
+		const unsigned int featureOffset = features_base_offset + featureIndex * numPixelsInBlock;
 		store_feature(features_data, featureOffset, features[featureIndex]);
 	}
 
@@ -1234,7 +992,7 @@ __global__ void new_fitter(
 		// Find length of vector in A's column with reduction sum function
 		pr_data_256[threadId] = tmp_sum_value;
 		SyncThreads();
-		parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
+		parallel_reduction_sum_256(&vec_length, pr_data_256, threadId);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
 		// initially wanted col_limited is used to select wich work-item runs which branch
@@ -1327,7 +1085,7 @@ __global__ void new_fitter(
 
 			pr_data_256[threadId] = tmp_sum_value;
 			SyncThreads();
-			parallel_reduction_sum_256(&dotProd, pr_data_256, col_limited);
+			parallel_reduction_sum_256(&dotProd, pr_data_256, threadId);
 
 			const float dotFactor = 2.0f * dotProd / u_length_squared;
 
@@ -1483,94 +1241,6 @@ extern "C" void run_new_fitter(
 	);
 }
 
-// Unrolled parallel sum reduction of 256 values (half-precision)
-// TODO: unused start_index...
-inline __device__ void parallel_reduction_sum_256(half * K_RESTRICT result, half * K_RESTRICT pr_data_256, const int start_index)
-{
-	const int id = threadIdx.x;
-
-	#if K_SUPPORT_HALF16_ARITHMETIC
-	if(id < 64)
-	{
-		half2 tmp = __hadd2(__halves2half2(pr_data_256[id],		  pr_data_256[id + 64]),
-							__halves2half2(pr_data_256[id + 128], pr_data_256[id + 192])
-					);
-
-		pr_data_256[id] = __hadd(__high2half(tmp), __low2half(tmp));
-	}
-							
-	SyncThreads();
-
-	if(id < 8)
-	{
-		half2 tmp0 = __hadd2(__halves2half2(pr_data_256[id],	  pr_data_256[id + 8]),
-							 __halves2half2(pr_data_256[id + 16], pr_data_256[id + 24])
-					 );
-
-		half2 tmp1 = __hadd2(__halves2half2(pr_data_256[id + 32], pr_data_256[id + 40]),
-							 __halves2half2(pr_data_256[id + 48], pr_data_256[id + 56])
-					 );
-
-		half2 tmp2 = __hadd2(tmp0, tmp1);
-
-		pr_data_256[id] = __hadd(__high2half(tmp2), __low2half(tmp2));
-	}
-	SyncThreads();
-
-	if(id == 0)
-	{
-		#if 0
-		half2 tmp0 = __hadd2(__halves2half2(pr_data_256[0], pr_data_256[1]),
-							 __halves2half2(pr_data_256[2], pr_data_256[3])
-					 );
-
-		half2 tmp1 = __hadd2(__halves2half2(pr_data_256[4], pr_data_256[5]),
-							 __halves2half2(pr_data_256[6], pr_data_256[7])
-					 );
-		#else
-		half2 tmp0 = __hadd2(*reinterpret_cast<half2*>(pr_data_256 + 0),
-							 *reinterpret_cast<half2*>(pr_data_256 + 2)
-					 );
-		half2 tmp1 = __hadd2(*reinterpret_cast<half2*>(pr_data_256 + 4),
-							 *reinterpret_cast<half2*>(pr_data_256 + 6)
-					 );
-		#endif
-
-		half2 tmp2 = __hadd2(tmp0, tmp1);
-
-		*result = __hadd(__high2half(tmp2), __low2half(tmp2));
-	}
-	SyncThreads();
-	#else // K_SUPPORT_HALF16_ARITHMETIC
-	if(id < 64)
-	{
-		pr_data_256[id] = Add(
-							Add(pr_data_256[id],		pr_data_256[id + 64]),
-							Add(pr_data_256[id + 128],	pr_data_256[id + 192])
-						  );
-	}
-	SyncThreads();
-
-	if(id < 8)
-	{
-		pr_data_256[id] = Add(
-							Add(Add(pr_data_256[id], pr_data_256[id + 8]),		 Add(pr_data_256[id + 16], pr_data_256[id + 24])),
-							Add(Add(pr_data_256[id + 32], pr_data_256[id + 40]), Add(pr_data_256[id + 48], pr_data_256[id + 56]))
-						  );
-	}
-	SyncThreads();
-
-	if(id == 0)
-	{
-		*result = Add(
-					Add(Add(pr_data_256[0], pr_data_256[1]), Add(pr_data_256[2], pr_data_256[3])),
-					Add(Add(pr_data_256[4], pr_data_256[5]), Add(pr_data_256[6], pr_data_256[7]))
-				  );
-	}
-	SyncThreads();
-#endif // K_SUPPORT_HALF16_ARITHMETIC
-}
-
 
 inline __device__ void load_r_mat(const half * K_RESTRICT r_mat, unsigned int x, unsigned int y, half oValue[3])
 {
@@ -1712,7 +1382,7 @@ __global__ void fitter16bits(
 		// Find length of vector in A's column with reduction sum function
 		pr_data_256[threadId] = tmp_sum_value;
 		SyncThreads();
-		parallel_reduction_sum_256(&vec_length, pr_data_256, col_limited + 1);
+		parallel_reduction_sum_256(&vec_length, pr_data_256, threadId);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
 		// initially wanted col_limited is used to select wich work-item runs which branch
@@ -1800,7 +1470,7 @@ __global__ void fitter16bits(
 
 			pr_data_256[threadId] = tmp_sum_value;
 			SyncThreads();
-			parallel_reduction_sum_256(&dotProd, pr_data_256, col_limited);
+			parallel_reduction_sum_256(&dotProd, pr_data_256, threadId);
 
 			const half dotFactor = Mul(FloatToHalf(2.0f), Div(dotProd, u_length_squared));
 
@@ -1955,8 +1625,8 @@ __global__ void new_weighted_sum(
 	const int linear_pixel = pixel.y * w + pixel.x;
 
 	// Retrieve linear group index from the offset pixel
-	const ivec2 offset_pixel = pixel + BLOCK_EDGE_HALF - BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
-	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * params.worksetWithMarginBlockCountX;
+	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords(pixel, ivec2(params.blockSize), params.frameNumber);
+	const int group_index = (offset_pixel.x / params.blockSize) + (offset_pixel.y / params.blockSize) * params.worksetWithMarginBlockCountX;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
 	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)

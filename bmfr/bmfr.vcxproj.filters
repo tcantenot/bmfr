@@ -64,6 +64,15 @@
     <ClInclude Include="IntelOpenImageDenoiser.hpp">
       <Filter>Intel</Filter>
     </ClInclude>
+    <ClInclude Include="reduction.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="math.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="config.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bmfr\bmfr_cuda.cpp">
