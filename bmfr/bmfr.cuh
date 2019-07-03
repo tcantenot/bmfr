@@ -80,7 +80,27 @@ inline __device__ void GlobalMemFence()
 
 // TODO: try to cycle through all offsets using Bayer matrix
 #define BLOCK_OFFSETS_COUNT 16
-__device__ __constant__ icvec2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
+
+__device__ __constant__ icvec2 BLOCK_OFFSETS_16[BLOCK_OFFSETS_COUNT] = {
+	{  -7,  -7 },
+	{   2,  -3 },
+	{  -4,   7 },
+	{   4,   0 },
+	{  -5,  -4 },
+	{   1,   6 },
+	{   6,  -6 },
+	{  -5,   0 },
+	{   6,   7 },
+	{  -4,  -8 },
+	{   3,   3 },
+	{  -1,  -1 },
+	{   3,  -7 },
+	{  -8,   6 },
+	{   7,  -2 },
+	{  -3,   2 }
+};
+
+__device__ __constant__ icvec2 BLOCK_OFFSETS_32[BLOCK_OFFSETS_COUNT] = {
 	{ -14, -14 },
 	{   4,  -6 },
 	{  -8,  14 },
@@ -99,6 +119,24 @@ __device__ __constant__ icvec2 BLOCK_OFFSETS[BLOCK_OFFSETS_COUNT] = {
 	{  -6,   4 }
 };
 
+__device__ __constant__ icvec2 BLOCK_OFFSETS_64[BLOCK_OFFSETS_COUNT] = {
+	{ -28, -28 },
+	{   8, -12 },
+	{ -16,  28 },
+	{  16,   0 },
+	{ -20,  -4 },
+	{   4,  24 },
+	{  24, -24 },
+	{ -20,   0 },
+	{  24,  28 },
+	{ -16, -32 },
+	{  12,  12 },
+	{  -4,  -4 },
+	{  12, -28 },
+	{ -32,  24 },
+	{  28,  -8 },
+	{ -12,   8 }
+};
 
 // R matrix indexing and operations ////////////////////////////////////////////
 

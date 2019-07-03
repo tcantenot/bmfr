@@ -160,24 +160,35 @@ inline __device__ void store_feature(half * buffer, unsigned int index, half val
 }
 
 
-inline __device__ ivec2 PixelCoordsToShiftedPixelCoords(
-	ivec2 const & pixelCoords,
-	ivec2 const & blockSize,
-	unsigned int frameNumber
-)
+template <int FitterBlockSize>
+inline __device__ ivec2 GetBlockOffset(unsigned int frameNumber)
 {
-	const ivec2 halfBlockSize = blockSize / ivec2(2);
-	return pixelCoords - halfBlockSize + BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];// / ivec2(2); 
+	switch(FitterBlockSize)
+	{
+		case 16: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_16[frameNumber % BLOCK_OFFSETS_COUNT];
+		case 32: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_32[frameNumber % BLOCK_OFFSETS_COUNT];
+		case 64: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_64[frameNumber % BLOCK_OFFSETS_COUNT];
+		default: return ivec2(0);
+	}
 }
 
-inline __device__ ivec2 ShiftedPixelCoordsToPixelCoords(
+
+template <int FitterBlockSize>
+inline __device__ ivec2 PixelCoordsToShiftedPixelCoords(
 	ivec2 const & pixelCoords,
-	ivec2 const & blockSize,
 	unsigned int frameNumber
 )
 {
-	const ivec2 halfBlockSize = blockSize / ivec2(2);
-	return pixelCoords + halfBlockSize - BLOCK_OFFSETS[frameNumber % BLOCK_OFFSETS_COUNT];// / ivec2(2);
+	return pixelCoords + GetBlockOffset<FitterBlockSize>(frameNumber); 
+}
+
+template <int FitterBlockSize>
+inline __device__ ivec2 ShiftedPixelCoordsToPixelCoords(
+	ivec2 const & pixelCoords,
+	unsigned int frameNumber
+)
+{
+	return pixelCoords - GetBlockOffset<FitterBlockSize>(frameNumber);
 }
 
 // Compute features ////////////////////////////////////////////////////////////
@@ -217,13 +228,14 @@ inline __device__ void compute_features(
 
 // Rescale features ////////////////////////////////////////////////////////////
 
+template <int FitterBlockSize>
 __global__ void rescale_world_positions_pr(
 	RescaleFeaturesParams params,
 	float const * world_positions,
 	float * normalized_world_positions
 )
 {
-	__shared__ float lds[1024];
+	__shared__ float lds[FitterBlockSize * FitterBlockSize];
 	__shared__ float block_min;
 	__shared__ float block_max;
 
@@ -233,7 +245,7 @@ __global__ void rescale_world_positions_pr(
 	const int h = params.sizeY;
 
 	#if !NORMALIZE_FEATURES_USING_4_BLOCKS
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords<FitterBlockSize>(gtid, params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -272,7 +284,7 @@ __global__ void rescale_world_positions_pr(
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
 
 	#else // 4-blocks (not really a win in quality...)
-	const ivec2 offset = -ivec2(params.fitterBlockSize / 2) + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 offset = GetBlockOffset<FitterBlockSize>(frameNumber);
 
 	ivec2 offsets[4] =
 	{
@@ -348,17 +360,19 @@ extern "C" void run_rescale_world_positions_pr(
 	float * normalized_world_positions
 )
 {
-	rescale_world_positions_pr<<<grid_size, block_size>>>(
-		params,
-		world_positions,
-		normalized_world_positions
-	);
+	switch(params.fitterBlockSize)
+	{
+		case 16:rescale_world_positions_pr<16><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
+		case 32: rescale_world_positions_pr<32><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
+		case 64: rescale_world_positions_pr<64><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
+		default: break;
+	}
 }
 
 // Accumulate noisy 1spp color kernel //////////////////////////////////////////
 
-template <typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
-__device__ void template_accumulate_noisy_data_frame0(
+template <int FitterBlockSize, typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
+__global__ void template_accumulate_noisy_data_frame0(
 	AccumulateNoisyDataKernelParams params,
 	const NormalType * K_RESTRICT frame_normals,			// [in]  Frame (world) normals
 	const PosType * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
@@ -374,7 +388,7 @@ __device__ void template_accumulate_noisy_data_frame0(
 	const int h = params.sizeY;
 
 	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords<FitterBlockSize>(gtid, params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -404,13 +418,13 @@ __device__ void template_accumulate_noisy_data_frame0(
 	FeaturesType features[BUFFER_COUNT];
 	compute_features(normalized_world_position, normal, current_color, features);
 
-	const unsigned int x_block = gtid.x / params.fitterBlockSize; // Block coordinate x
-	const unsigned int y_block = gtid.y / params.fitterBlockSize; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % params.fitterBlockSize; // Thread coordinate x inside block in [0, blockSize-1]
-	const unsigned int y_in_block = gtid.y % params.fitterBlockSize; // Thread coordinate y inside block in [0, blockSize-1]
+	const unsigned int x_block = gtid.x / FitterBlockSize; // Block coordinate x
+	const unsigned int y_block = gtid.y / FitterBlockSize; // Block coordinate y
+	const unsigned int x_in_block = gtid.x % FitterBlockSize; // Thread coordinate x inside block in [0, FitterBlockSize-1]
+	const unsigned int y_in_block = gtid.y % FitterBlockSize; // Thread coordinate y inside block in [0, FitterBlockSize-1]
 
-	const unsigned int numPixelsInBlock = params.fitterBlockSize * params.fitterBlockSize;
-	const unsigned int features_base_offset = x_in_block + y_in_block * params.fitterBlockSize +
+	const unsigned int numPixelsInBlock = FitterBlockSize * FitterBlockSize;
+	const unsigned int features_base_offset = x_in_block + y_in_block * FitterBlockSize +
 		x_block * numPixelsInBlock * BUFFER_COUNT +
 		y_block * params.worksetWithMarginBlockCountX *
 		numPixelsInBlock * BUFFER_COUNT;
@@ -441,52 +455,6 @@ __device__ void template_accumulate_noisy_data_frame0(
 	}
 }
 
-__global__ void accumulate_noisy_data_frame0(
-	AccumulateNoisyDataKernelParams params,
-	const float * K_RESTRICT frame_normals,					// [in]  Frame (world) normals
-	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
-	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color buffer
-		  float * K_RESTRICT frame_acc_noisy,				// [out] Frame accumulated noisy color
-		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Frame accumulated number of samples (for CMA)
-	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data							// [out] Features buffer (half-precision)
-	#else
-	float * K_RESTRICT features_data						// [out] Features buffer (single-precision)
-	#endif
-)
-{
-	template_accumulate_noisy_data_frame0(
-		params,
-		frame_normals,
-		frame_normalized_positions,
-		frame_noisy_1spp,
-		frame_acc_noisy,
-		frame_acc_num_spp,
-		features_data
-	);
-}
-
-__global__ void accumulate_noisy_data_frame0_16bits(
-	AccumulateNoisyDataKernelParams params,
-	const half * K_RESTRICT frame_normals,				// [in]  Frame (world) normals
-	const half * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
-	const half * K_RESTRICT frame_noisy_1spp,			// [in]  Frame noisy 1spp color buffer
-	half * K_RESTRICT frame_acc_noisy,					// [out] Frame accumulated noisy color
-	unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Frame accumulated number of samples (for CMA)
-	half * K_RESTRICT features_data						// [out] Features buffer (half-precision)
-)
-{
-	template_accumulate_noisy_data_frame0(
-		params,
-		frame_normals,
-		frame_normalized_positions,
-		frame_noisy_1spp,
-		frame_acc_noisy,
-		frame_acc_num_spp,
-		features_data
-	);
-}
-
 extern "C" void run_accumulate_noisy_data_frame0(
 	dim3 const & grid_size,
 	dim3 const & block_size,
@@ -503,19 +471,56 @@ extern "C" void run_accumulate_noisy_data_frame0(
 	#endif
 )
 {
-	accumulate_noisy_data_frame0<<<grid_size, block_size>>>(
-		params,
-		frame_normals,
-		frame_normalized_positions,
-		frame_noisy_1spp,
-		frame_acc_noisy,
-		frame_acc_num_spp,
-		features_data
-	);
+	switch(params.fitterBlockSize)
+	{
+		case 16:
+		{
+			template_accumulate_noisy_data_frame0<16><<<grid_size, block_size>>>(
+				params,
+				frame_normals,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				frame_acc_num_spp,
+				features_data
+			);
+			break;
+		}
+
+		case 32:
+		{
+			template_accumulate_noisy_data_frame0<32><<<grid_size, block_size>>>(
+				params,
+				frame_normals,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				frame_acc_num_spp,
+				features_data
+			);
+			break;
+		}
+
+		case 64:
+		{
+			template_accumulate_noisy_data_frame0<64><<<grid_size, block_size>>>(
+				params,
+				frame_normals,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				frame_acc_num_spp,
+				features_data
+			);
+			break;
+		}
+
+		default: break;
+	}
 }
 
-template <typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
-__device__ void template_accumulate_noisy_data(
+template <int FitterBlockSize, typename NormalType, typename PosType, typename InColorType, typename OutColorType, typename FeaturesType>
+__global__ void template_accumulate_noisy_data(
 	AccumulateNoisyDataKernelParams params,
 	vec2 * K_RESTRICT out_prev_frame_pixel,					// [out] Previous frame pixel coordinates (after reprojection)
 	unsigned char* K_RESTRICT accept_bools,					// [out] Validity mask of bilinear samples in previous frame (after reprojection)
@@ -540,7 +545,7 @@ __device__ void template_accumulate_noisy_data(
 	const int h = params.sizeY;
 
 	// Mirror indexed of the input. x and y are always less than one size out of bounds if image dimensions are bigger than block size
-	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords(gtid, ivec2(params.fitterBlockSize), params.frameNumber);
+	const ivec2 pixel_without_mirror = PixelCoordsToShiftedPixelCoords<FitterBlockSize>(gtid, params.frameNumber);
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -777,49 +782,6 @@ __device__ void template_accumulate_noisy_data(
 }
 
 
-__global__ void new_accumulate_noisy_data(
-	AccumulateNoisyDataKernelParams params,
-	vec2 * K_RESTRICT out_prev_frame_pixel,					// [out] Previous frame pixel coordinates (after reprojection)
-	unsigned char* K_RESTRICT accept_bools,					// [out] Validity mask of bilinear samples in previous frame (after reprojection)
-	const float * K_RESTRICT frame_normals,					// [in]  Current  frame (world) normals
-	const float * K_RESTRICT prev_frame_normals,			// [in]  Previous frame (world) normals
-	const float * K_RESTRICT frame_positions,				// [in]  Current  frame world positions
-	const float * K_RESTRICT prev_frame_positions,			// [in]  Previous frame world positions
-	const float * K_RESTRICT frame_normalized_positions,	// [in]  Frame normalized world positions
-	const float * K_RESTRICT frame_noisy_1spp,				// [in]  Frame noisy 1spp color
-		  float * K_RESTRICT frame_acc_noisy,				// [out] Current  frame accumulated noisy color
-	const float * K_RESTRICT prev_frame_acc_noisy,			// [in]  Previous frame accumulated noisy color
-	const unsigned char * K_RESTRICT prev_frame_acc_spp,	// [in]  Previous frame accumulated number of samples (for CMA)
-		  unsigned char * K_RESTRICT frame_acc_num_spp,		// [out] Current  frame accumulated number of samples (for CMA)
-	#if USE_HALF_PRECISION_IN_FEATURES_DATA
-	half * K_RESTRICT features_data,						// [out] Features buffer (half-precision)
-	#else
-	float * K_RESTRICT features_data,						// [out] Features buffer (single-precision)
-	#endif
-	const mat4x4 prev_frame_camera_matrix,					// [in]  ViewProj matrix of previous frame
-	const vec2 pixel_offset
-)
-{
-	template_accumulate_noisy_data(
-		params,
-		out_prev_frame_pixel,
-		accept_bools,
-		frame_normals,
-		prev_frame_normals,
-		frame_positions,
-		prev_frame_positions,
-		frame_normalized_positions,
-		frame_noisy_1spp,
-		frame_acc_noisy,
-		prev_frame_acc_noisy,
-		prev_frame_acc_spp,
-		frame_acc_num_spp,
-		features_data,
-		prev_frame_camera_matrix,
-		pixel_offset
-	);
-}
-
 extern "C" void run_new_accumulate_noisy_data(
 	dim3 const & grid_size,
 	dim3 const & block_size,
@@ -845,29 +807,84 @@ extern "C" void run_new_accumulate_noisy_data(
 	const vec2 pixel_offset
 )
 {
-	new_accumulate_noisy_data<<<grid_size, block_size>>>(
-		params,
-		out_prev_frame_pixel,
-		accept_bools,
-		frame_normals,
-		prev_frame_normals,
-		frame_positions,
-		prev_frame_positions,
-		frame_normalized_positions,
-		frame_noisy_1spp,
-		frame_acc_noisy,
-		prev_frame_acc_noisy,
-		prev_frame_acc_spp,
-		frame_acc_num_spp,
-		features_data,
-		prev_frame_camera_matrix,
-		pixel_offset
-	);
+	switch(params.fitterBlockSize)
+	{
+		case 16:
+		{
+			template_accumulate_noisy_data<16><<<grid_size, block_size>>>(
+				params,
+				out_prev_frame_pixel,
+				accept_bools,
+				frame_normals,
+				prev_frame_normals,
+				frame_positions,
+				prev_frame_positions,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				prev_frame_acc_noisy,
+				prev_frame_acc_spp,
+				frame_acc_num_spp,
+				features_data,
+				prev_frame_camera_matrix,
+				pixel_offset
+			);
+			break;
+		}
+
+		case 32:
+		{
+			template_accumulate_noisy_data<32><<<grid_size, block_size>>>(
+				params,
+				out_prev_frame_pixel,
+				accept_bools,
+				frame_normals,
+				prev_frame_normals,
+				frame_positions,
+				prev_frame_positions,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				prev_frame_acc_noisy,
+				prev_frame_acc_spp,
+				frame_acc_num_spp,
+				features_data,
+				prev_frame_camera_matrix,
+				pixel_offset
+			);
+			break;
+		}
+
+		case 64:
+		{
+			template_accumulate_noisy_data<64><<<grid_size, block_size>>>(
+				params,
+				out_prev_frame_pixel,
+				accept_bools,
+				frame_normals,
+				prev_frame_normals,
+				frame_positions,
+				prev_frame_positions,
+				frame_normalized_positions,
+				frame_noisy_1spp,
+				frame_acc_noisy,
+				prev_frame_acc_noisy,
+				prev_frame_acc_spp,
+				frame_acc_num_spp,
+				features_data,
+				prev_frame_camera_matrix,
+				pixel_offset
+			);
+			break;
+		}
+
+		default: break;
+	}
 }
 
 // Fitter kernel ///////////////////////////////////////////////////////////////
 
-template <unsigned int NumValuesInBlock, unsigned int LocalSize>
+template <int FitterBlockSize, unsigned int LocalSize>
 __global__ void template_fitter(
 	FitterKernelParams params,
 	float * K_RESTRICT weights,					// [out] Features weights
@@ -878,7 +895,7 @@ __global__ void template_fitter(
 	#endif
 )
 {
-	static_assert(NumValuesInBlock % LocalSize == 0, "NumValuesInBlock must be divisible by LocalSize");
+	static_assert(FitterBlockSize % LocalSize == 0, "FitterBlockSize must be divisible by LocalSize");
 
 	// TODO: send as define for cpp side
 	#if COMPRESSED_R
@@ -890,7 +907,7 @@ __global__ void template_fitter(
 	#endif
 
 	__shared__ float pr_shared_data[LocalSize];			// Shared memory used to perform parallel reduction
-	__shared__ float u_vec_sdata[NumValuesInBlock];		// Shared memory used to store the 'u' vectors
+	__shared__ float u_vec_sdata[FitterBlockSize];		// Shared memory used to store the 'u' vectors
 	__shared__ cvec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
 	__shared__ float u_length_squared;					// Shared memory variable that holds the 'u' vector square length
 	__shared__ float dotProd;							// Shared memory variable that holds the dot product of...
@@ -906,17 +923,17 @@ __global__ void template_fitter(
 	const unsigned int blockIndexX = groupId % params.worksetWithMarginBlockCountX;
 	const unsigned int blockIndexY = groupId / params.worksetWithMarginBlockCountX;
 	const unsigned int linearBlockIndex = blockIndexY * params.worksetWithMarginBlockCountX + blockIndexX;
-	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * BUFFER_COUNT * NumValuesInBlock + threadId;
+	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * BUFFER_COUNT * FitterBlockSize + threadId;
 
-	const unsigned int baseSeed = params.frameNumber * BUFFER_COUNT * NumValuesInBlock + threadId;
+	const unsigned int baseSeed = params.frameNumber * BUFFER_COUNT * FitterBlockSize + threadId;
 	
 	// Non square matrices require processing every column.
 	// Otherwise result is OKish, but R is not upper triangular matrix
-	const int limit = (BUFFER_COUNT == NumValuesInBlock) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
+	const int limit = (BUFFER_COUNT == FitterBlockSize) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
 
 	
 	#if USE_FEATURES_VGPR_CACHE
-	const unsigned int FeaturesCacheSize = (NumValuesInBlock / LocalSize) * BUFFER_COUNT;
+	const unsigned int FeaturesCacheSize = (FitterBlockSize / LocalSize) * BUFFER_COUNT;
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half featuresCache[FeaturesCacheSize];
 	#else
@@ -925,10 +942,10 @@ __global__ void template_fitter(
 
 	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
 	{
-		const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
+		const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
+		const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 
-		for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
+		for(int subVector = 0; subVector < (FitterBlockSize / LocalSize); ++subVector)
 		{
 			const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
 			const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
@@ -951,16 +968,16 @@ __global__ void template_fitter(
 		const int featureIndex = col;
 
 		#if USE_FEATURES_VGPR_CACHE
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
+		const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 		#else
-		const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
+		const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
 		#endif
 
 		float tmp_sum_value = 0.f;
 
-		// Manual unrolling for parallel reduction in case NumValuesInBlock is greater than LocalSize
+		// Manual unrolling for parallel reduction in case FitterBlockSize is greater than LocalSize
 		// as the reduction operates on LocalSize elements.
-		for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
+		for(int subVector = 0; subVector < (FitterBlockSize / LocalSize); ++subVector)
 		{
 			// Load feature
 			#if USE_FEATURES_VGPR_CACHE
@@ -1029,22 +1046,22 @@ __global__ void template_fitter(
 		for(int featureIndex = col_limited+1; featureIndex < BUFFER_COUNT; ++featureIndex)
 		{
 			#if USE_FEATURES_VGPR_CACHE
-			const unsigned int baseFeaturesCacheOffset = featureIndex * (NumValuesInBlock / LocalSize);
+			const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 			#else
-			const unsigned int baseFeatureOffset = featureIndex * NumValuesInBlock + threadFeaturesBuffersOffset;
+			const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
 			#endif
 
-			const unsigned int baseFeatureSeed = featureIndex * NumValuesInBlock + baseSeed;
+			const unsigned int baseFeatureSeed = featureIndex * FitterBlockSize + baseSeed;
 
 			// Starts by computing dot product with reduction sum function
 			#if CACHE_TMP_DATA
 			// No need to load features_buffer twice because each work-item first copies value for
 			// dot product computation and then modifies the same value
-			float tmp_data_private_cache[NumValuesInBlock / LocalSize];
+			float tmp_data_private_cache[FitterBlockSize / LocalSize];
 			#endif
 
 			float tmp_sum_value = 0.f;
-			for(int subVector = 0; subVector < NumValuesInBlock / LocalSize; ++subVector)
+			for(int subVector = 0; subVector < FitterBlockSize / LocalSize; ++subVector)
 			{
 				const int index = subVector * LocalSize + threadId;
 				if(index >= col_limited)
@@ -1086,9 +1103,9 @@ __global__ void template_fitter(
 
 			const float dotFactor = 2.0f * dotProd / u_length_squared;
 
-			// Manual unrolling for parallel reduction in case NumValuesInBlock is greater than LocalSize
+			// Manual unrolling for parallel reduction in case FitterBlockSize is greater than LocalSize
 			// as the reduction operates on LocalSize elements.
-			for(int subVector = 0; subVector < (NumValuesInBlock / LocalSize); ++subVector)
+			for(int subVector = 0; subVector < (FitterBlockSize / LocalSize); ++subVector)
 			{
 				const int index = subVector * LocalSize + threadId;
 				if(index >= col_limited)
@@ -1624,7 +1641,8 @@ extern "C" void run_fitter16bits(
 // Weighted sum kernel /////////////////////////////////////////////////////////
 // -> outputs the noise-free 1spp color estimate
 
-__global__ void new_weighted_sum(
+template <int FitterBlockSize>
+__global__ void template_weighted_sum(
 	WeightedSumKernelParams params,
 	const float * K_RESTRICT weights,			// [in]	 Features weights computed by the fitter kernel
 		  float * K_RESTRICT output,			// [out] Noise-free color estimate
@@ -1644,8 +1662,8 @@ __global__ void new_weighted_sum(
 	const int linear_pixel = pixel.y * w + pixel.x;
 
 	// Retrieve linear group index from the offset pixel
-	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords(pixel, ivec2(params.fitterBlockSize), params.frameNumber);
-	const int group_index = (offset_pixel.x / params.fitterBlockSize) + (offset_pixel.y / params.fitterBlockSize) * params.worksetWithMarginBlockCountX;
+	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords<FitterBlockSize>(pixel, params.frameNumber);
+	const int group_index = (offset_pixel.x / FitterBlockSize) + (offset_pixel.y / FitterBlockSize) * params.worksetWithMarginBlockCountX;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
 	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)
@@ -1683,13 +1701,46 @@ extern "C" void run_new_weighted_sum(
 	const float * K_RESTRICT current_positions	// [in]  Current world positions
 )
 {
-	new_weighted_sum<<<grid_size, block_size>>>(
-		params,
-		weights,
-		output,
-		current_normals,
-		current_positions
-	);
+	switch(params.fitterBlockSize)
+	{
+		case 16:
+		{
+			template_weighted_sum<16><<<grid_size, block_size>>>(
+				params,
+				weights,
+				output,
+				current_normals,
+				current_positions
+			);
+			break;
+		}
+
+		case 32:
+		{
+			template_weighted_sum<32><<<grid_size, block_size>>>(
+				params,
+				weights,
+				output,
+				current_normals,
+				current_positions
+			);
+			break;
+		}
+
+		case 64:
+		{
+			template_weighted_sum<64><<<grid_size, block_size>>>(
+				params,
+				weights,
+				output,
+				current_normals,
+				current_positions
+			);
+			break;
+		}
+
+		default: break;
+	}
 }
 
 // Accumulate filtered data kernel /////////////////////////////////////////////

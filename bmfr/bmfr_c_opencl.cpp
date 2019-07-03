@@ -295,15 +295,16 @@ int bmfr_c_opencl(TmpData & tmpData)
 
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
+	const size_t fitterBlockSize = BLOCK_EDGE_LENGTH;
 
 	const size_t localWidth					= GetLocalWidth();
 	const size_t localHeight				= GetLocalHeight();
-	const size_t worksetWidth				= ComputeWorksetWidth(w);
-	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
-	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
+	const size_t worksetWidth				= ComputeWorksetWidth(w, fitterBlockSize);
+	const size_t worksetHeight				= ComputeWorksetHeight(h, fitterBlockSize);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w, fitterBlockSize);
+	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h, fitterBlockSize);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h, fitterBlockSize);
 
 
 	// Create and build the kernel

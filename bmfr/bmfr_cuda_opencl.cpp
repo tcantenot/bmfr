@@ -130,15 +130,16 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
+	const size_t fitterBlockSize = BLOCK_EDGE_LENGTH;
 
 	const size_t localWidth					= GetLocalWidth();
 	const size_t localHeight				= GetLocalHeight();
-	const size_t worksetWidth				= ComputeWorksetWidth(w);
-	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWithMarginWidth		= ComputeWorksetWithMarginWidth(w);
-	const size_t worksetWithMarginHeight	= ComputeWorksetWithMarginHeight(h);
+	const size_t worksetWidth				= ComputeWorksetWidth(w, fitterBlockSize);
+	const size_t worksetHeight				= ComputeWorksetHeight(h, fitterBlockSize);
+	const size_t worksetWithMarginWidth		= ComputeWorksetWithMarginWidth(w, fitterBlockSize);
+	const size_t worksetWithMarginHeight	= ComputeWorksetWithMarginHeight(h, fitterBlockSize);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h, fitterBlockSize);
 
 
 	// OpenCL init /////////////////////////////////////////////////////////////
@@ -310,7 +311,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 	LOG("\nAllocate CUDA buffers\n");
 
 	BMFRCudaBuffers cu_buffers;
-	init_bmfr_cuda_buffers(cu_buffers, w, h, buffer_count);
+	init_bmfr_cuda_buffers(cu_buffers, w, h, fitterBlockSize, buffer_count);
 
 	std::vector<Double_buffer<CudaDeviceBuffer> *> cuda_double_buffers =
 	{
@@ -381,7 +382,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		AccumulateNoisyDataKernelParams accNoisyDataParams;
 		accNoisyDataParams.sizeX = w;
 		accNoisyDataParams.sizeY = h;
-		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		accNoisyDataParams.frameNumber = frame;
 
 		run_accumulate_noisy_data(
@@ -452,7 +453,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		K_OPENCL_CHECK(clEnqueueNDRangeKernel(command_queue, fitter_kernel, 1, NULL, k_fitter_global_size, k_fitter_local_size, 0, NULL, NULL));
 
 		FitterKernelParams fitterParams;
-		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		fitterParams.frameNumber = frame;
 
 		run_fitter(
@@ -491,7 +492,7 @@ void bmfr_cuda_c_opencl(TmpData & cudaTmpData, TmpData & openclTmpData)
 		WeightedSumKernelParams weightedSumParams;
 		weightedSumParams.sizeX = w;
 		weightedSumParams.sizeY = h;
-		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		weightedSumParams.frameNumber = frame;
 
 		run_weighted_sum(

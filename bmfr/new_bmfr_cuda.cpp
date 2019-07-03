@@ -29,7 +29,13 @@
 //
 // - try to accumulate auxiliary feature buffers with the same reconstruction filter as the 1spp
 
-void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h, size_t features_count)
+void init_new_bmfr_cuda_buffers(
+	NewBMFRCudaBuffers & buffers,
+	size_t w,
+	size_t h,
+	size_t fitterBlockSize,
+	size_t features_count
+)
 {
 	size_t cudaBufferTotalSize = 0;
 
@@ -70,7 +76,7 @@ void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h
 	cudaBufferTotalSize += 2 * noisy_1spp_buffer_size;
 
 	// Features buffer (half or single-precision) (3 * float16 or 3 * float32)
-	const BufferDesc featuresBufferDesc = GetFeaturesBufferDesc(w, h, features_count - 3, USE_HALF_PRECISION_IN_FEATURES_DATA);
+	const BufferDesc featuresBufferDesc = GetFeaturesBufferDesc(w, h, fitterBlockSize, features_count - 3, USE_HALF_PRECISION_IN_FEATURES_DATA);
 	const size_t features_buffer_size = featuresBufferDesc.byte_size;
     buffers.features_buffer.init(features_buffer_size);
 	cudaBufferTotalSize += features_buffer_size;
@@ -114,7 +120,7 @@ void init_new_bmfr_cuda_buffers(NewBMFRCudaBuffers & buffers, size_t w, size_t h
 	cudaBufferTotalSize += noisefree_1spp_acc_tonemapped_size;
 
 	// Features weights per color channel (x3) (computed by the BMFR) (3 * float32)
-	const BufferDesc featuresWeightsBufferDesc = GetFeaturesWeightsBufferDesc(w, h, (features_count - 3));
+	const BufferDesc featuresWeightsBufferDesc = GetFeaturesWeightsBufferDesc(w, h, fitterBlockSize, (features_count - 3));
 	const size_t features_weights_buffer_size = featuresWeightsBufferDesc.byte_size;
     buffers.features_weights_buffer.init(features_weights_buffer_size);
 	cudaBufferTotalSize += features_weights_buffer_size;
@@ -152,15 +158,16 @@ int new_bmfr_cuda(TmpData & tmpData)
 
 	const size_t w = IMAGE_WIDTH;
 	const size_t h = IMAGE_HEIGHT;
+	const size_t fitterBlockSize = BLOCK_EDGE_LENGTH;
 
 	const size_t localWidth					= GetLocalWidth();
 	const size_t localHeight				= GetLocalHeight();
-	const size_t worksetWidth				= ComputeWorksetWidth(w);
-	const size_t worksetHeight				= ComputeWorksetHeight(h);
-	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w);
-	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h);
+	const size_t worksetWidth				= ComputeWorksetWidth(w, fitterBlockSize);
+	const size_t worksetHeight				= ComputeWorksetHeight(h, fitterBlockSize);
+	const size_t worksetWidthWithMargin		= ComputeWorksetWithMarginWidth(w, fitterBlockSize);
+	const size_t worksetHeightWithMargin	= ComputeWorksetWithMarginHeight(h, fitterBlockSize);
 	const size_t fitterLocalSize			= GetFitterLocalSize();
-	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h);
+	const size_t fitterGlobalSize			= GetFitterGlobalSize(w, h, fitterBlockSize);
 
 
 	// Create CUDA buffers
@@ -168,7 +175,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 	LOG("\nAllocate CUDA buffers\n");
 
 	NewBMFRCudaBuffers buffers;
-	init_new_bmfr_cuda_buffers(buffers, w, h, buffer_count);
+	init_new_bmfr_cuda_buffers(buffers, w, h, fitterBlockSize, buffer_count);
 
 	std::vector<Double_buffer<CudaDeviceBuffer> *> cuda_double_buffers =
 	{
@@ -188,13 +195,11 @@ int new_bmfr_cuda(TmpData & tmpData)
 	std::vector<CudaTimer> accumulate_noisefree_estimate_timers(FRAME_COUNT);
 	std::vector<CudaTimer> taa_timers(FRAME_COUNT);
 
-	const dim3 k_rescale_world_pos_block_size(32, 32);
+	const dim3 k_rescale_world_pos_block_size(fitterBlockSize, fitterBlockSize);
 	const dim3 k_rescale_world_pos_grid_size(
 		(worksetWidthWithMargin  + k_rescale_world_pos_block_size.x - 1) / k_rescale_world_pos_block_size.x,
 		(worksetHeightWithMargin + k_rescale_world_pos_block_size.y - 1) / k_rescale_world_pos_block_size.y
 	);
-
-	const unsigned int fitterBlockSize = BLOCK_EDGE_LENGTH;
 
     const dim3 k_block_size(localWidth, localHeight);
     const dim3 k_workset_grid_size((worksetWidth + k_block_size.x - 1) / k_block_size.x, (worksetHeight + k_block_size.y - 1) / k_block_size.y);
@@ -244,6 +249,8 @@ int new_bmfr_cuda(TmpData & tmpData)
 			buffers.normalized_positions_buffer.getTypedData<float>()
 		);
 
+		K_CUDA_CHECK(cudaDeviceSynchronize());
+
 		rescale_features_timers[frame].stop();
 
 		// Phase I:
@@ -264,7 +271,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		accNoisyDataParams.sizeX = w;
 		accNoisyDataParams.sizeY = h;
 		accNoisyDataParams.fitterBlockSize = fitterBlockSize;
-		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		accNoisyDataParams.frameNumber = frame;
 
 		accumulate_noisy_data_timers[frame].start();
@@ -328,7 +335,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		}
 		#endif
 
-		//K_CUDA_CHECK(cudaDeviceSynchronize());
+		K_CUDA_CHECK(cudaDeviceSynchronize());
 
 		#if SAVE_INTERMEDIARY_BUFFERS
 		SaveDevice3Float32ImageToDisk("noisy_1spp_buffer", frame, buffers.noisy_1spp_buffer.current(), GetNoisy1sppBufferDesc(w, h), "_new_cuda.png");
@@ -347,7 +354,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		FitterKernelParams fitterParams;
 		fitterParams.kernelLocalSize = fitterLocalSize;
 		fitterParams.fitterBlockSize = fitterBlockSize;
-		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		fitterParams.frameNumber = frame;
 
 		fitter_timers[frame].start();
@@ -389,7 +396,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		weightedSumParams.sizeX = w;
 		weightedSumParams.sizeY = h;
 		weightedSumParams.fitterBlockSize = fitterBlockSize;
-		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w);
+		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		weightedSumParams.frameNumber = frame;
 
 		weighted_sum_timers[frame].start();

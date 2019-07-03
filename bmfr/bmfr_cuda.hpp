@@ -24,6 +24,12 @@ struct BMFRCudaBuffers
 	std::vector<float> result_host;
 };
 
-void init_bmfr_cuda_buffers(BMFRCudaBuffers & buffers, size_t w, size_t h, size_t features_count);
+void init_bmfr_cuda_buffers(
+	BMFRCudaBuffers & buffers,
+	size_t w,
+	size_t h,
+	size_t fitterBlockSize,
+	size_t features_count
+);
 
 int bmfr_cuda(TmpData & data);

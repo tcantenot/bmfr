@@ -36,7 +36,7 @@ __global__ void accumulate_noisy_data(
 	// Mirror indexed of the input. x and y are always less than one size out of
 	// bounds if image dimensions are bigger than BLOCK_EDGE_LENGTH
 	// BLOCK_EDGE_HALF = half block size (32/2 -> 16)
-	const ivec2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 pixel_without_mirror = gid - BLOCK_EDGE_HALF + BLOCK_OFFSETS_32[params.frameNumber % BLOCK_OFFSETS_COUNT];
 
 	// Pixel coordinates in [0, w-1]x[0, h-1]
 	const ivec2 pixel = mirror2(pixel_without_mirror, ivec2(w, h));
@@ -733,7 +733,7 @@ __global__ void weighted_sum(
 	const int linear_pixel = pixel.y * w + pixel.x;
 
 	// Retrieve linear group index from the offset pixel
-	const ivec2 offset_pixel = pixel + BLOCK_EDGE_HALF - BLOCK_OFFSETS[params.frameNumber % BLOCK_OFFSETS_COUNT];
+	const ivec2 offset_pixel = pixel + BLOCK_EDGE_HALF - BLOCK_OFFSETS_32[params.frameNumber % BLOCK_OFFSETS_COUNT];
 	const int group_index = (offset_pixel.x / BLOCK_EDGE_LENGTH) + (offset_pixel.y / BLOCK_EDGE_LENGTH) * params.worksetWithMarginBlockCountX;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
