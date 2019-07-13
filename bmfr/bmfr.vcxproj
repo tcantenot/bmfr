@@ -213,6 +213,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="..\bmfr\bmfr.cu" />
+    <CudaCompile Include="fitter_tests.cu" />
     <CudaCompile Include="new_bmfr.cu" />
   </ItemGroup>
   <ItemGroup>
@@ -226,6 +227,7 @@ If exist "$(ProjectDir)..\3rd-party\*.dll" copy "$(ProjectDir)..\3rd-party\*.dll
     <ClInclude Include="config.cuh" />
     <ClInclude Include="config.hpp" />
     <ClInclude Include="cuda_helpers.hpp" />
+    <ClInclude Include="fitter_tests.cuh" />
     <ClInclude Include="IntelOpenImageDenoiser.hpp" />
     <ClInclude Include="math.cuh" />
     <ClInclude Include="new_bmfr.cuh" />

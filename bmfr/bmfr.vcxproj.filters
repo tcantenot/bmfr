@@ -24,6 +24,9 @@
     <CudaCompile Include="new_bmfr.cu">
       <Filter>Cuda</Filter>
     </CudaCompile>
+    <CudaCompile Include="fitter_tests.cu">
+      <Filter>Cuda</Filter>
+    </CudaCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\bmfr\bmfr.cuh">
@@ -71,6 +74,9 @@
       <Filter>Cuda</Filter>
     </ClInclude>
     <ClInclude Include="config.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
+    <ClInclude Include="fitter_tests.cuh">
       <Filter>Cuda</Filter>
     </ClInclude>
   </ItemGroup>

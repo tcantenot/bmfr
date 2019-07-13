@@ -1,5 +1,6 @@
 #include "new_bmfr_cuda.hpp"
 #include "new_bmfr.cuh"
+#include "fitter_tests.cuh"
 
 #include "cuda_helpers.hpp"
 #include "utils.hpp"
@@ -209,6 +210,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 	
     LOG("\nRun kernels.\n");
 
+	#if 1
 	FrameInputData frameInput;
 	for(int frame = 0; frame < FRAME_COUNT; ++frame)
     {
@@ -588,6 +590,107 @@ int new_bmfr_cuda(TmpData & tmpData)
 
 	float avgFrameTime_ms = totalElapsedTime_ms / float(FRAME_COUNT);
 	LOG("Average frame timing: %.3fms\n", avgFrameTime_ms);
+	#else
+	{
+		LOG("Test fitter\n");
+
+		CudaDeviceBuffer fitter_test_outputs, fitter_test_refs;
+		const BufferDesc noiseFree1sppBufferDesc = GetNoiseFree1sppBufferDesc(w, h);
+		fitter_test_outputs.init(noiseFree1sppBufferDesc.byte_size);
+		fitter_test_refs.init(noiseFree1sppBufferDesc.byte_size);
+
+		unsigned int frame = 0;
+
+		DEBUG_LOG("  Run accumulate_noisy_data kernel: grid (%d, %d) | block(%d, %d)\n", 
+			k_workset_with_margin_grid_size.x,
+			k_workset_with_margin_grid_size.y,
+			k_block_size.x,
+			k_block_size.y
+		);
+
+		ComputeTestsFeaturesKernelParams testsFeaturesParams;
+		testsFeaturesParams.sizeX = w;
+		testsFeaturesParams.sizeY = h;
+		testsFeaturesParams.fitterBlockSize = fitterBlockSize;
+		testsFeaturesParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, testsFeaturesParams.fitterBlockSize);
+		testsFeaturesParams.frameNumber = frame;
+
+		run_compute_tests_features(
+			k_workset_with_margin_grid_size,
+			k_block_size,
+			testsFeaturesParams,
+			buffers.features_buffer.getTypedData<float>()
+		);
+
+		K_CUDA_CHECK(cudaDeviceSynchronize());
+
+		DEBUG_LOG("  Run fitter kernel: grid (%d, %d) | block(%d, %d)\n", 
+			k_fitter_grid_size.x,
+			k_fitter_grid_size.y,
+			k_fitter_block_size.x,
+			k_fitter_block_size.y
+		);
+
+		FitterKernelParams fitterParams;
+		fitterParams.kernelLocalSize = fitterLocalSize;
+		fitterParams.fitterBlockSize = fitterBlockSize;
+		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
+		fitterParams.frameNumber = frame;
+		fitterParams.noiseAmount = 0.f;
+
+		run_new_fitter(
+			k_fitter_grid_size,
+			k_fitter_block_size,
+			fitterParams,
+			buffers.features_weights_buffer.getTypedData<float>(),
+			buffers.features_buffer.getTypedData<float>()
+		);
+
+		K_CUDA_CHECK(cudaDeviceSynchronize());
+
+		DEBUG_LOG("  Run weighted_sum kernel: grid (%d, %d) | block(%d, %d)\n", 
+			k_workset_grid_size.x,
+			k_workset_grid_size.y,
+			k_block_size.x,
+			k_block_size.y
+		);
+
+		WeightedSumTestKernelParams weightedSumParams;
+		weightedSumParams.sizeX = w;
+		weightedSumParams.sizeY = h;
+		weightedSumParams.fitterBlockSize = fitterBlockSize;
+		weightedSumParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
+		weightedSumParams.frameNumber = frame;
+
+		run_test_weighted_sum(
+			k_workset_grid_size,
+			k_block_size,
+			weightedSumParams,
+			buffers.features_weights_buffer.getTypedData<float>(),
+			fitter_test_outputs.getTypedData<float>(),
+			fitter_test_refs.getTypedData<float>()
+		);
+
+		const size_t fitter_test_outputs_size = fitter_test_outputs.size();
+		std::vector<float> host_fitter_test_outputs;
+		host_fitter_test_outputs.resize(fitter_test_outputs_size / sizeof(float));
+		K_CUDA_CHECK(cudaMemcpy(host_fitter_test_outputs.data(), fitter_test_outputs.data(), fitter_test_outputs_size, cudaMemcpyDeviceToHost));
+
+		std::vector<float> host_fitter_test_refs;
+		host_fitter_test_refs.resize(fitter_test_outputs_size / sizeof(float));
+		K_CUDA_CHECK(cudaMemcpy(host_fitter_test_refs.data(), fitter_test_refs.data(), fitter_test_outputs_size, cudaMemcpyDeviceToHost));
+
+		for(size_t i = 0; i < host_fitter_test_outputs.size(); ++i)
+		{
+			float o = host_fitter_test_outputs[i];
+			float r = host_fitter_test_refs[i];
+			if(abs(o - r) > 1e-5f)
+			{
+				printf("Diff[%d]: %.9g != %.9g\n", i, o, r);
+			}
+		}
+	}
+	#endif
 
 	return 0;
 }
