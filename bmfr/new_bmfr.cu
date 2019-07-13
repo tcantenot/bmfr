@@ -160,37 +160,6 @@ inline __device__ void store_feature(half * buffer, unsigned int index, half val
 }
 
 
-template <int FitterBlockSize>
-inline __device__ ivec2 GetBlockOffset(unsigned int frameNumber)
-{
-	switch(FitterBlockSize)
-	{
-		case 16: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_16[frameNumber % BLOCK_OFFSETS_COUNT];
-		case 32: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_32[frameNumber % BLOCK_OFFSETS_COUNT];
-		case 64: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_64[frameNumber % BLOCK_OFFSETS_COUNT];
-		default: return ivec2(0);
-	}
-}
-
-
-template <int FitterBlockSize>
-inline __device__ ivec2 PixelCoordsToShiftedPixelCoords(
-	ivec2 const & pixelCoords,
-	unsigned int frameNumber
-)
-{
-	return pixelCoords + GetBlockOffset<FitterBlockSize>(frameNumber); 
-}
-
-template <int FitterBlockSize>
-inline __device__ ivec2 ShiftedPixelCoordsToPixelCoords(
-	ivec2 const & pixelCoords,
-	unsigned int frameNumber
-)
-{
-	return pixelCoords - GetBlockOffset<FitterBlockSize>(frameNumber);
-}
-
 // Compute features ////////////////////////////////////////////////////////////
 
 template <typename T, typename U, typename FeatureType>
@@ -362,7 +331,7 @@ extern "C" void run_rescale_world_positions_pr(
 {
 	switch(params.fitterBlockSize)
 	{
-		case 16:rescale_world_positions_pr<16><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
+		case 16: rescale_world_positions_pr<16><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
 		case 32: rescale_world_positions_pr<32><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
 		case 64: rescale_world_positions_pr<64><<<grid_size, block_size>>>(params, world_positions,	normalized_world_positions); break;
 		default: break;
@@ -1087,7 +1056,7 @@ __global__ void template_fitter(
 					if(col == 0 && featureIndex < BUFFER_COUNT - 3)
 					{
 						const int seed = subVector * LocalSize + baseFeatureSeed;
-						tmp += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
+						tmp += params.noiseAmount * SignedZeroMeanNoise(seed);
 					}
 
 					#if CACHE_TMP_DATA
@@ -1129,7 +1098,7 @@ __global__ void template_fitter(
 							float store_value = load_feature(features_buffer, featureOffset);
 						#endif
 					const int seed = subVector * LocalSize + baseFeatureSeed;
-					store_value += NOISE_AMOUNT * SignedZeroMeanNoise(seed);
+					store_value += params.noiseAmount * SignedZeroMeanNoise(seed);
 					#endif 
 
 					store_value -= dotFactor * u_vec[index];
@@ -1494,7 +1463,7 @@ __global__ void fitter16bits(
 					if(col == 0 && featureIndex < BUFFER_COUNT - 3)
 					{
 						const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
-						tmp = Add(tmp, FloatToHalf(NOISE_AMOUNT * SignedZeroMeanNoise(seed)));
+						tmp = Add(tmp, FloatToHalf(params.noiseAmount * SignedZeroMeanNoise(seed)));
 					}
 
 					#if CACHE_TMP_DATA
@@ -1532,7 +1501,7 @@ __global__ void fitter16bits(
 						half store_value = features_buffer[featureOffset];
 						#endif
 						const int seed = subVector * LOCAL_SIZE + baseFeatureSeed;
-						store_value = Add(store_value, FloatToHalf(NOISE_AMOUNT * SignedZeroMeanNoise(seed)));
+						store_value = Add(store_value, FloatToHalf(params.noiseAmount * SignedZeroMeanNoise(seed)));
 					#endif 
 
 					store_value = Sub(store_value, Mul(dotFactor, u_vec[index]));

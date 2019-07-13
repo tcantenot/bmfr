@@ -271,7 +271,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		accNoisyDataParams.sizeX = w;
 		accNoisyDataParams.sizeY = h;
 		accNoisyDataParams.fitterBlockSize = fitterBlockSize;
-		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
+		accNoisyDataParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, accNoisyDataParams.fitterBlockSize);
 		accNoisyDataParams.frameNumber = frame;
 
 		accumulate_noisy_data_timers[frame].start();
@@ -356,6 +356,7 @@ int new_bmfr_cuda(TmpData & tmpData)
 		fitterParams.fitterBlockSize = fitterBlockSize;
 		fitterParams.worksetWithMarginBlockCountX = ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize);
 		fitterParams.frameNumber = frame;
+		fitterParams.noiseAmount = 1e-2f;
 
 		fitter_timers[frame].start();
 		#if 1

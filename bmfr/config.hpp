@@ -183,9 +183,6 @@
 
 /////////////////////////////////////
 
-
-constexpr size_t BlockSize = BLOCK_EDGE_LENGTH;
-
 inline constexpr size_t GetLocalWidth()
 {
 	return LOCAL_WIDTH;
@@ -196,41 +193,41 @@ inline constexpr size_t GetLocalHeight()
 	return LOCAL_HEIGHT;
 }
 
-inline constexpr size_t ComputeWorksetWidth(size_t w)
+inline constexpr size_t ComputeWorksetWidth(size_t w, size_t fitterBlockSize)
 {
-	return BlockSize * ((w + BlockSize - 1) / BlockSize);
+	return fitterBlockSize * ((w + fitterBlockSize - 1) / fitterBlockSize);
 }
 
-inline constexpr size_t ComputeWorksetHeight(size_t h)
+inline constexpr size_t ComputeWorksetHeight(size_t h, size_t fitterBlockSize)
 {
-	return BlockSize * ((h + BlockSize - 1) / BlockSize);
+	return fitterBlockSize * ((h + fitterBlockSize - 1) / fitterBlockSize);
 }
 
-inline constexpr size_t ComputeWorksetWithMarginWidth(size_t w)
+inline constexpr size_t ComputeWorksetWithMarginWidth(size_t w, size_t fitterBlockSize)
 {
-	return ComputeWorksetWidth(w) + BlockSize;
+	return ComputeWorksetWidth(w, fitterBlockSize) + fitterBlockSize;
 }
 
-inline constexpr size_t ComputeWorksetWithMarginHeight(size_t h)
+inline constexpr size_t ComputeWorksetWithMarginHeight(size_t h, size_t fitterBlockSize)
 {
-	return ComputeWorksetHeight(h) + BlockSize;
+	return ComputeWorksetHeight(h, fitterBlockSize) + fitterBlockSize;
 }
 
-inline constexpr size_t ComputeWorksetWithMarginBlockCountX(size_t w)
+inline constexpr size_t ComputeWorksetWithMarginBlockCountX(size_t w, size_t fitterBlockSize)
 {
-	return ((w + BlockSize - 1) / BlockSize) + 1;
-	//return ComputeWorksetWithMarginWidth(w) / BlockSize;
+	return ((w + fitterBlockSize - 1) / fitterBlockSize) + 1;
+	//return ComputeWorksetWithMarginWidth(w, fitterBlockSize) / fitterBlockSize;
 }
 
-inline constexpr size_t ComputeWorksetWithMarginBlockCountY(size_t h)
+inline constexpr size_t ComputeWorksetWithMarginBlockCountY(size_t h, size_t fitterBlockSize)
 {
-	return ((h + BlockSize - 1) / BlockSize) + 1;
-	//return ComputeWorksetWithMarginHeight(h) / BlockSize;
+	return ((h + fitterBlockSize - 1) / fitterBlockSize) + 1;
+	//return ComputeWorksetWithMarginHeight(h, fitterBlockSize) / fitterBlockSize;
 }
 
-inline constexpr size_t ComputeWorksetWithMarginBlockCount(size_t w, size_t h)
+inline constexpr size_t ComputeWorksetWithMarginBlockCount(size_t w, size_t h, size_t fitterBlockSize)
 {
-	return ComputeWorksetWithMarginBlockCountX(w) * ComputeWorksetWithMarginBlockCountY(h);
+	return ComputeWorksetWithMarginBlockCountX(w, fitterBlockSize) * ComputeWorksetWithMarginBlockCountY(h, fitterBlockSize);
 }
 
 inline constexpr size_t GetFitterLocalSize()
@@ -238,9 +235,9 @@ inline constexpr size_t GetFitterLocalSize()
 	return LOCAL_SIZE;
 }
 
-inline constexpr size_t GetFitterGlobalSize(size_t w, size_t h)
+inline constexpr size_t GetFitterGlobalSize(size_t w, size_t h, size_t fitterBlockSize)
 {
-	return GetFitterLocalSize() * ComputeWorksetWithMarginBlockCount(w, h);
+	return GetFitterLocalSize() * ComputeWorksetWithMarginBlockCount(w, h, fitterBlockSize);
 }
 
 struct BufferDesc
@@ -263,22 +260,22 @@ inline BufferDesc GetRGB32FBufferDesc(size_t w, size_t h)
 	return desc;
 }
 
-inline BufferDesc GetRGB32FWorksetBufferDesc(size_t w, size_t h)
+inline BufferDesc GetRGB32FWorksetBufferDesc(size_t w, size_t h, size_t fitterBlockSize)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWidth(w);
-	desc.h = ComputeWorksetHeight(h);
+	desc.w = ComputeWorksetWidth(w, fitterBlockSize);
+	desc.h = ComputeWorksetHeight(h, fitterBlockSize);
 	desc.x_stride  = 3 * sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
 
-inline BufferDesc GetRGB32FWorksetWithMarginBufferDesc(size_t w, size_t h)
+inline BufferDesc GetRGB32FWorksetWithMarginBufferDesc(size_t w, size_t h, size_t fitterBlockSize)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWithMarginWidth(w);
-	desc.h = ComputeWorksetWithMarginHeight(h);
+	desc.w = ComputeWorksetWithMarginWidth(w, fitterBlockSize);
+	desc.h = ComputeWorksetWithMarginHeight(h, fitterBlockSize);
 	desc.x_stride  = 3 * sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
 	desc.byte_size = desc.h * desc.y_stride;
@@ -328,21 +325,27 @@ inline BufferDesc GetSppBufferDesc(size_t w, size_t h)
 	return desc;
 }
 
-inline BufferDesc GetFeaturesBufferDesc(size_t w, size_t h, size_t features_count, bool bHalfPrecision)
+inline BufferDesc GetFeaturesBufferDesc(
+	size_t w,
+	size_t h,
+	size_t fitterBlockSize,
+	size_t features_count,
+	bool bHalfPrecision
+)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWithMarginWidth(w) * (features_count + 3); // + 3 for the output color estimate
-	desc.h = ComputeWorksetWithMarginHeight(h);
+	desc.w = ComputeWorksetWithMarginWidth(w, fitterBlockSize) * (features_count + 3); // + 3 for the output color estimate
+	desc.h = ComputeWorksetWithMarginHeight(h, fitterBlockSize);
 	desc.x_stride  = bHalfPrecision ? sizeof(short) : sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
 	desc.byte_size = desc.h * desc.y_stride;
 	return desc;
 }
 
-inline BufferDesc GetFeaturesWeightsBufferDesc(size_t w, size_t h, size_t features_count)
+inline BufferDesc GetFeaturesWeightsBufferDesc(size_t w, size_t h, size_t fitterBlockSize, size_t features_count)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWithMarginBlockCount(w, h) * features_count * 3;
+	desc.w = ComputeWorksetWithMarginBlockCount(w, h, fitterBlockSize) * features_count * 3;
 	desc.h = 1;
 	desc.x_stride  = sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
@@ -350,10 +353,10 @@ inline BufferDesc GetFeaturesWeightsBufferDesc(size_t w, size_t h, size_t featur
 	return desc;
 }
 
-inline BufferDesc GetFeaturesMinMaxBufferDesc(size_t w, size_t h, size_t features_to_scale_count)
+inline BufferDesc GetFeaturesMinMaxBufferDesc(size_t w, size_t h, size_t fitterBlockSize, size_t features_to_scale_count)
 {
 	BufferDesc desc;
-	desc.w = ComputeWorksetWithMarginBlockCount(w, h) * features_to_scale_count * 2;
+	desc.w = ComputeWorksetWithMarginBlockCount(w, h, fitterBlockSize) * features_to_scale_count * 2;
 	desc.h = 1;
 	desc.x_stride  = sizeof(float);
 	desc.y_stride  = desc.w * desc.x_stride;
@@ -377,6 +380,5 @@ struct TmpData
 	std::vector<float> noisefree_1spp_accumulated;
 	std::vector<float> noisefree_1spp_acc_tonemapped;
 	std::vector<float> result;
-
 };
 

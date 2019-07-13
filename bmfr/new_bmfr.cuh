@@ -12,6 +12,37 @@ struct BMFRFrameData
 };
 
 
+template <int FitterBlockSize>
+inline __device__ ivec2 GetBlockOffset(unsigned int frameNumber)
+{
+	switch(FitterBlockSize)
+	{
+		case 16: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_16[frameNumber % BLOCK_OFFSETS_COUNT];
+		case 32: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_32[frameNumber % BLOCK_OFFSETS_COUNT];
+		case 64: return ivec2(-FitterBlockSize / 2) + BLOCK_OFFSETS_64[frameNumber % BLOCK_OFFSETS_COUNT];
+		default: return ivec2(0);
+	}
+}
+
+
+template <int FitterBlockSize>
+inline __device__ ivec2 PixelCoordsToShiftedPixelCoords(
+	ivec2 const & pixelCoords,
+	unsigned int frameNumber
+)
+{
+	return pixelCoords + GetBlockOffset<FitterBlockSize>(frameNumber); 
+}
+
+template <int FitterBlockSize>
+inline __device__ ivec2 ShiftedPixelCoordsToPixelCoords(
+	ivec2 const & pixelCoords,
+	unsigned int frameNumber
+)
+{
+	return pixelCoords - GetBlockOffset<FitterBlockSize>(frameNumber);
+}
+
 // Rescale features ////////////////////////////////////////////////////////////
 
 struct RescaleFeaturesParams

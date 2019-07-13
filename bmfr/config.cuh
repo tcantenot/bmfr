@@ -5,3 +5,5 @@
 #include <cuda_fp16.h>
 
 #define K_SUPPORT_HALF16_ARITHMETIC (__CUDA_ARCH__ >= 530)
+
+#define K_RESTRICT __restrict__

@@ -30,8 +30,6 @@ world_position.z*world_position.z
 #define FEATURE_BUFFERS NOT_SCALED_FEATURE_BUFFERS SCALED_FEATURE_BUFFERS
 
 
-#define K_RESTRICT __restrict__
-
 #ifdef __CUDACC__
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -425,6 +423,7 @@ struct FitterKernelParams
 	unsigned int kernelLocalSize;
 	unsigned int worksetWithMarginBlockCountX;
 	unsigned int frameNumber;
+	float noiseAmount;
 };
 
 extern "C" void run_fitter(
