@@ -79,6 +79,9 @@
     <ClInclude Include="fitter_tests.cuh">
       <Filter>Cuda</Filter>
     </ClInclude>
+    <ClInclude Include="colormaps.cuh">
+      <Filter>Cuda</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\bmfr\bmfr_cuda.cpp">
