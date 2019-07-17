@@ -3,12 +3,16 @@
 #include "reduction.cuh"
 
 // TODO
+// - Replace USE_HALF_PRECISION_IN_FEATURES_DATA by template params + "dynamic" decision on CPU side
+// - Replace BUFFER_COUNT by ...? And dependent variables (R_EDGE, ...)
 // - Try to pass everything as half (inputs and outputs)
 //   --> #define WorldPositionType|WorldNormals|... float or half
 // - LoadWorldPositions, LoadWorldNormals, ...
 
 #define NORMALIZE_FEATURES_USING_4_BLOCKS 0
 #define USE_FEATURES_VGPR_CACHE USE_HALF_PRECISION_IN_FEATURES_DATA
+
+using uint = unsigned int;
 
 
 inline __device__ float Add(float lhs, float rhs) { return lhs + rhs; }
@@ -230,30 +234,30 @@ __global__ void rescale_world_positions_pr(
 		
 	lds[tid] = v.x;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = v.x;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledX = -Min(-scale(v.x, block_min, block_max), 0.0f); // Remove NaN
 
 	lds[tid] = v.y;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = v.y;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledY = -Min(-scale(v.y, block_min, block_max), 0.0f);
 
 	lds[tid] = v.z;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = v.z;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
 
 	#else // 4-blocks (not really a win in quality...)
-	const ivec2 offset = GetBlockOffset<FitterBlockSize>(frameNumber);
+	const ivec2 offset = GetBlockOffset<FitterBlockSize>(params.frameNumber);
 
 	ivec2 offsets[4] =
 	{
@@ -285,31 +289,30 @@ __global__ void rescale_world_positions_pr(
 		vmax = Max(vmax, v_i);
 	}
 	
-	// Note: assume group of size 1024
 	const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
 		
 	lds[tid] = vmin.x;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = vmax.x;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledX = -Min(-scale(v.x, block_min, block_max), 0.0f); // Remove NaN
 
 	lds[tid] = vmin.y;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = vmax.y;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledY = -Min(-scale(v.y, block_min, block_max), 0.0f);
 
 	lds[tid] = vmin.z;
 	SyncThreads();
-	parallel_reduction_min_1024(&block_min, lds, tid);
+	parallel_reduction_min<FitterBlockSize * FitterBlockSize>(&block_min, lds, tid);
 	lds[tid] = vmax.z;
 	SyncThreads();
-	parallel_reduction_max_1024(&block_max, lds, tid);
+	parallel_reduction_max<FitterBlockSize * FitterBlockSize>(&block_max, lds, tid);
 	float scaledZ = -Min(-scale(v.z, block_min, block_max), 0.0f);
 	#endif
 
@@ -383,28 +386,32 @@ __global__ void template_accumulate_noisy_data_frame0(
 	// Current frame (world) normal
 	const tvec3<NormalType> normal = load3<NormalType>(frame_normals, linear_pixel);
 
+	const uint BufferCount = BUFFER_COUNT;
+
 	// Compute the set of feature buffers used in the fitting
-	FeaturesType features[BUFFER_COUNT];
+	FeaturesType features[BufferCount];
 	compute_features(normalized_world_position, normal, current_color, features);
 
-	const unsigned int x_block = gtid.x / FitterBlockSize; // Block coordinate x
-	const unsigned int y_block = gtid.y / FitterBlockSize; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % FitterBlockSize; // Thread coordinate x inside block in [0, FitterBlockSize-1]
-	const unsigned int y_in_block = gtid.y % FitterBlockSize; // Thread coordinate y inside block in [0, FitterBlockSize-1]
+	const uint fitterBlockX = gtid.x / FitterBlockSize;
+	const uint fitterBlockY = gtid.y / FitterBlockSize;
+	const uint xInFitterBlock = gtid.x % FitterBlockSize;
+	const uint yInFitterBlock = gtid.y % FitterBlockSize;
+	const uint numPixelsInBlock = FitterBlockSize * FitterBlockSize;
 
-	const unsigned int numPixelsInBlock = FitterBlockSize * FitterBlockSize;
-	const unsigned int features_base_offset = x_in_block + y_in_block * FitterBlockSize +
-		x_block * numPixelsInBlock * BUFFER_COUNT +
-		y_block * params.worksetWithMarginBlockCountX *
-		numPixelsInBlock * BUFFER_COUNT;
+	// TODO: send constants so that:
+	// features_base_offset = x_in_block * params.featureOffsetScale0 + y_in_block * params.featureOffsetScale1;
+	const uint numFeaturesInBlock = numPixelsInBlock * BufferCount;
+	const uint featuresBaseOffset = fitterBlockY * params.worksetWithMarginBlockCountX * numFeaturesInBlock +
+									fitterBlockX * numFeaturesInBlock +
+									yInFitterBlock * FitterBlockSize + xInFitterBlock;
 	
 	// TODO: change layout of features buffer to allow 128-bit loads?
 	// --> | Block 0 thread 0 feature 0 | Block 0 thread 0 feature 1 | ... | Block 0 thread 1 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
+	for(uint featureIndex = 0; featureIndex < BufferCount; ++featureIndex)
 	{
 		// Offset in feature buffer (data are concatenated)
 		// | Block 0 thread 0 feature 0 | Block 0 thread 1 feature 0 | ... | Block 0 thread 0 feature M | ... | Block 1 thread 0 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-		const unsigned int featureOffset = features_base_offset + featureIndex * numPixelsInBlock;
+		const uint featureOffset = featuresBaseOffset + featureIndex * numPixelsInBlock;
 		store_feature(features_data, featureOffset, features[featureIndex]);
 	}
 
@@ -693,31 +700,32 @@ __global__ void template_accumulate_noisy_data(
 
 	vec3 new_color = Lerp(previous_color, current_color, blend_alpha);
 
+	const uint BufferCount = BUFFER_COUNT;
+
 	// Compute the set of feature buffers used in the fitting
-	FeaturesType features[BUFFER_COUNT];
+	FeaturesType features[BufferCount];
 	compute_features(normalized_world_position, normal, new_color, features);
 
-	const unsigned int x_block = gtid.x / params.fitterBlockSize; // Block coordinate x
-	const unsigned int y_block = gtid.y / params.fitterBlockSize; // Block coordinate y
-	const unsigned int x_in_block = gtid.x % params.fitterBlockSize; // Thread coordinate x inside block in [0, blockSize-1]
-	const unsigned int y_in_block = gtid.y % params.fitterBlockSize; // Thread coordinate y inside block in [0, blockSize-1]
-
-	const unsigned int numPixelsInBlock = params.fitterBlockSize * params.fitterBlockSize;
+	const uint fitterBlockX = gtid.x / FitterBlockSize;
+	const uint fitterBlockY = gtid.y / FitterBlockSize;
+	const uint xInFitterBlock = gtid.x % FitterBlockSize;
+	const uint yInFitterBlock = gtid.y % FitterBlockSize;
+	const uint numPixelsInBlock = FitterBlockSize * FitterBlockSize;
 
 	// TODO: send constants so that:
 	// features_base_offset = x_in_block * params.featureOffsetScale0 + y_in_block * params.featureOffsetScale1;
-	const unsigned int features_base_offset = x_in_block + y_in_block * params.fitterBlockSize +
-		x_block * numPixelsInBlock * BUFFER_COUNT +
-		y_block * params.worksetWithMarginBlockCountX *
-		numPixelsInBlock * BUFFER_COUNT;
+	const uint numFeaturesInBlock = numPixelsInBlock * BufferCount;
+	const uint featuresBaseOffset = fitterBlockY * params.worksetWithMarginBlockCountX * numFeaturesInBlock +
+									fitterBlockX * numFeaturesInBlock +
+									yInFitterBlock * FitterBlockSize + xInFitterBlock;
 	
 	// TODO: change layout of features buffer to allow 128-bit loads?
 	// --> | Block 0 thread 0 feature 0 | Block 0 thread 0 feature 1 | ... | Block 0 thread 1 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
+	for(uint featureIndex = 0; featureIndex < BufferCount; ++featureIndex)
 	{
 		// Offset in feature buffer (data are concatenated)
 		// | Block 0 thread 0 feature 0 | Block 0 thread 1 feature 0 | ... | Block 0 thread 0 feature M | ... | Block 1 thread 0 feature 0 | ... | Block N thread 0 feature 0 | ... | Block N thread T feature M |
-		const unsigned int featureOffset = features_base_offset + featureIndex * numPixelsInBlock;
+		const uint featureOffset = featuresBaseOffset + featureIndex * numPixelsInBlock;
 		store_feature(features_data, featureOffset, features[featureIndex]);
 	}
 
@@ -866,58 +874,59 @@ __global__ void template_fitter(
 {
 	static_assert(FitterBlockSize % LocalSize == 0, "FitterBlockSize must be divisible by LocalSize");
 
-	// TODO: send as define for cpp side
+	const uint BufferCount = BUFFER_COUNT;
+	
+	// Note: the last 3 buffer values are the 3 channels of the color ("target" of the regression)
+	const uint FeatureCount = BufferCount - 3;
+
+	// Size of the R matrix of the QR-factorization A = QR
+	const uint RMatSize = FeatureCount + 1;
+
 	#if COMPRESSED_R
-    //const auto r_size = ((buffer_count - 2) * (buffer_count - 1) / 2) * sizeof(cl_float3);
-	#define R_SHARED_DATA_SIZE ((BUFFER_COUNT - 2) * (BUFFER_COUNT - 1) / 2)
+    const uint RSharedDataSize = (RMatSize * (RMatSize + 1) / 2);
 	#else
-    //const auto r_size = (buffer_count - 2) * (buffer_count - 2) * sizeof(cl_float3);
-	#define R_SHARED_DATA_SIZE ((BUFFER_COUNT - 2) * (BUFFER_COUNT - 2))
+    const uint RSharedDataSize = RMatSize * RMatSize;
 	#endif
 
-	__shared__ float pr_shared_data[LocalSize];			// Shared memory used to perform parallel reduction
-	__shared__ float u_vec_sdata[FitterBlockSize];		// Shared memory used to store the 'u' vectors
-	__shared__ cvec3 r_mat_sdata[R_SHARED_DATA_SIZE];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
-	__shared__ float u_length_squared;					// Shared memory variable that holds the 'u' vector square length
-	__shared__ float dotProd;							// Shared memory variable that holds the dot product of...
-	__shared__ float vec_length;						// Shared memory variable that holds the vec length			
+	__shared__ float pr_shared_data[LocalSize];		// Shared memory used to perform parallel reduction
+	__shared__ float u_vec_sdata[FitterBlockSize];	// Shared memory used to store the 'u' vectors
+	__shared__ cvec3 r_mat_sdata[RSharedDataSize];	// Shared memory used to store the R matrices of the QR factorization (vec3 -> one per color channel)
+	__shared__ float u_length_squared;				// Shared memory variable that holds the 'u' vector square length
+	__shared__ float dotProd;						// Shared memory variable that holds the dot product of...
+	__shared__ float vec_length;					// Shared memory variable that holds the vec length			
 
 	float * pSharedData = &pr_shared_data[0];
 	float * u_vec = &u_vec_sdata[0];
 	cvec3 * r_mat = &r_mat_sdata[0];
 
-	const int groupId = blockIdx.x;
-	const int threadId = threadIdx.x; // in [0, 255]
+	const uint groupIdx = blockIdx.x;
+	const uint threadIdxInGroup = threadIdx.x; // in [0, 255]
 
-	const unsigned int blockIndexX = groupId % params.worksetWithMarginBlockCountX;
-	const unsigned int blockIndexY = groupId / params.worksetWithMarginBlockCountX;
-	const unsigned int linearBlockIndex = blockIndexY * params.worksetWithMarginBlockCountX + blockIndexX;
-	const unsigned int threadFeaturesBuffersOffset = linearBlockIndex * BUFFER_COUNT * FitterBlockSize + threadId;
+	const uint fitterBlockX = groupIdx % params.worksetWithMarginBlockCountX;
+	const uint fitterBlockY = groupIdx / params.worksetWithMarginBlockCountX;
+	const uint fitterBlockLinearIdx = fitterBlockY * params.worksetWithMarginBlockCountX + fitterBlockX;
+	const uint threadFeaturesBuffersOffset = fitterBlockLinearIdx * FitterBlockSize * BufferCount + threadIdxInGroup;
 
-	const unsigned int baseSeed = params.frameNumber * BUFFER_COUNT * FitterBlockSize + threadId;
+	const uint baseSeed = params.frameNumber * BufferCount * FitterBlockSize + threadIdxInGroup;
 	
-	// Non square matrices require processing every column.
-	// Otherwise result is OKish, but R is not upper triangular matrix
-	const int limit = (BUFFER_COUNT == FitterBlockSize) ? BUFFER_COUNT - 1 : BUFFER_COUNT;
 
-	
 	#if USE_FEATURES_VGPR_CACHE
-	const unsigned int FeaturesCacheSize = (FitterBlockSize / LocalSize) * BUFFER_COUNT;
+	const uint FeaturesCacheSize = (FitterBlockSize / LocalSize) * BufferCount;
 	#if USE_HALF_PRECISION_IN_FEATURES_DATA
 	half featuresCache[FeaturesCacheSize];
 	#else
 	float featuresCache[FeaturesCacheSize];
 	#endif
 
-	for(unsigned int featureIndex = 0; featureIndex < BUFFER_COUNT; ++featureIndex)
+	for(uint featureIndex = 0; featureIndex < BufferCount; ++featureIndex)
 	{
-		const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
+		const uint baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
+		const uint baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 
 		for(int subVector = 0; subVector < (FitterBlockSize / LocalSize); ++subVector)
 		{
-			const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
-			const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
+			const uint featureOffset = subVector * LocalSize + baseFeatureOffset;
+			const uint featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 			#if USE_HALF_PRECISION_IN_FEATURES_DATA
 			featuresCache[featuresCacheOffset] = features_buffer[featureOffset];
 			#else
@@ -927,19 +936,22 @@ __global__ void template_fitter(
 	}
 	#endif // USE_FEATURES_VGPR_CACHE
 
+	// Non square matrices require processing every column.
+	// Otherwise result is OKish, but R is not upper triangular matrix
+	const int limit = (BufferCount == FitterBlockSize) ? BufferCount - 1 : BufferCount;
+	
 	// Compute R
-	for(int col = 0; col < limit; col++)
+	for(uint col = 0; col < limit; col++)
 	{
-		// Note: the last 3 features values are the 3 channels of the color (not used for the regression)
-		int col_limited = Min(col, BUFFER_COUNT - 3);
+		uint col_limited = Min(col, FeatureCount);
 
 		// Load new column into memory
-		const int featureIndex = col;
+		const uint featureIndex = col;
 
 		#if USE_FEATURES_VGPR_CACHE
-		const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
+		const uint baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 		#else
-		const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
+		const uint baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
 		#endif
 
 		float tmp_sum_value = 0.f;
@@ -950,19 +962,19 @@ __global__ void template_fitter(
 		{
 			// Load feature
 			#if USE_FEATURES_VGPR_CACHE
-				const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
+				const uint featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 				#if USE_HALF_PRECISION_IN_FEATURES_DATA
 				float tmp = HalfToFloat(featuresCache[featuresCacheOffset]);
 				#else
 				float tmp = featuresCache[featuresCacheOffset];
 				#endif
 			#else
-				const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
+				const uint featureOffset = subVector * LocalSize + baseFeatureOffset;
 				float tmp = load_feature(features_buffer, featureOffset);
 			#endif
 
 			// Store the feature in shared memory
-			const int index = subVector * LocalSize + threadId;
+			const int index = subVector * LocalSize + threadIdxInGroup;
 			u_vec[index] = tmp;
 
 			if(index >= col_limited + 1)
@@ -973,20 +985,20 @@ __global__ void template_fitter(
 		SyncThreads();
 
 		// Find length of vector in A's column with reduction sum function
-		pSharedData[threadId] = tmp_sum_value;
+		pSharedData[threadIdxInGroup] = tmp_sum_value;
 		SyncThreads();
-		parallel_reduction_sum<LocalSize>(&vec_length, pSharedData, threadId);
+		parallel_reduction_sum<LocalSize>(&vec_length, pSharedData, threadIdxInGroup);
 
 		// NOTE: GCN Opencl compiler can do some optimization with this because if
 		// initially wanted col_limited is used to select wich work-item runs which branch
 		// it is slower. However using col produces the same result.
 		float r_value;
-		if(threadId < col)
+		if(threadIdxInGroup < col)
 		{
 			// Copy u_vec value
-			r_value = u_vec[threadId];
+			r_value = u_vec[threadIdxInGroup];
 		}
-		else if(threadId == col)
+		else if(threadIdxInGroup == col)
 		{
 			u_length_squared = vec_length;
 			vec_length = Sqrt(vec_length + u_vec[col_limited] * u_vec[col_limited]);
@@ -996,31 +1008,31 @@ __global__ void template_fitter(
 			// (u_length_squared is now updated length squared)
 			r_value = vec_length;
 		}
-		else if(threadId > col) //Could have "&& threadId <  R_EDGE" but this is little bit faster
+		else if(threadIdxInGroup > col) //Could have "&& threadIdxInGroup <  R_EDGE" but this is little bit faster
 		{
 			// Last values on every column are zeros
 			r_value = 0.0f;
 		}
 
-		int id_limited = Min(threadId, BUFFER_COUNT - 3);
-		if(col < BUFFER_COUNT - 3)
+		int id_limited = Min(threadIdxInGroup, FeatureCount);
+		if(col < FeatureCount)
 			store_r_mat_broadcast(r_mat, col_limited, id_limited, r_value);
 		else
-			store_r_mat_channel(r_mat, col_limited, id_limited, col - BUFFER_COUNT + 3, r_value);
+			store_r_mat_channel(r_mat, col_limited, id_limited, col - FeatureCount, r_value);
 		SyncThreads();
 
 		// Transform further columns of A
 		// NOTE: three last columns are three color channels of noisy data. However,
 		// they all need to be transfomed as they were column indexed (buffers - 3)
-		for(int featureIndex = col_limited+1; featureIndex < BUFFER_COUNT; ++featureIndex)
+		for(int featureIndex = col_limited+1; featureIndex < BufferCount; ++featureIndex)
 		{
 			#if USE_FEATURES_VGPR_CACHE
-			const unsigned int baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
+			const uint baseFeaturesCacheOffset = featureIndex * (FitterBlockSize / LocalSize);
 			#else
-			const unsigned int baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
+			const uint baseFeatureOffset = featureIndex * FitterBlockSize + threadFeaturesBuffersOffset;
 			#endif
 
-			const unsigned int baseFeatureSeed = featureIndex * FitterBlockSize + baseSeed;
+			const uint baseFeatureSeed = featureIndex * FitterBlockSize + baseSeed;
 
 			// Starts by computing dot product with reduction sum function
 			#if CACHE_TMP_DATA
@@ -1032,20 +1044,20 @@ __global__ void template_fitter(
 			float tmp_sum_value = 0.f;
 			for(int subVector = 0; subVector < FitterBlockSize / LocalSize; ++subVector)
 			{
-				const int index = subVector * LocalSize + threadId;
+				const int index = subVector * LocalSize + threadIdxInGroup;
 				if(index >= col_limited)
 				{
 					// Load feature
 
 					#if USE_FEATURES_VGPR_CACHE
-						const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
+						const uint featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 						#if USE_HALF_PRECISION_IN_FEATURES_DATA
 						float tmp = HalfToFloat(featuresCache[featuresCacheOffset]);
 						#else
 						float tmp = featuresCache[featuresCacheOffset];
 						#endif
 					#else
-						const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
+						const uint featureOffset = subVector * LocalSize + baseFeatureOffset;
 						float tmp = load_feature(features_buffer, featureOffset);
 					#endif
 
@@ -1053,7 +1065,7 @@ __global__ void template_fitter(
 					// To handle rank-deficiency in the T matrix, Add zero-mean noise to the input buffers
 					// (the first time values are loaded), which makes them linearly independent.
 					// Note: does not Add noise to constant buffer (column 0) and noisy image data (last 3 columns).
-					if(col == 0 && featureIndex < BUFFER_COUNT - 3)
+					if(col == 0 && featureIndex < FeatureCount)
 					{
 						const int seed = subVector * LocalSize + baseFeatureSeed;
 						tmp += params.noiseAmount * SignedZeroMeanNoise(seed);
@@ -1066,9 +1078,9 @@ __global__ void template_fitter(
 				}
 			}
 
-			pSharedData[threadId] = tmp_sum_value;
+			pSharedData[threadIdxInGroup] = tmp_sum_value;
 			SyncThreads();
-			parallel_reduction_sum<LocalSize>(&dotProd, pSharedData, threadId);
+			parallel_reduction_sum<LocalSize>(&dotProd, pSharedData, threadIdxInGroup);
 
 			const float dotFactor = 2.0f * dotProd / u_length_squared;
 
@@ -1076,13 +1088,13 @@ __global__ void template_fitter(
 			// as the reduction operates on LocalSize elements.
 			for(int subVector = 0; subVector < (FitterBlockSize / LocalSize); ++subVector)
 			{
-				const int index = subVector * LocalSize + threadId;
+				const int index = subVector * LocalSize + threadIdxInGroup;
 				if(index >= col_limited)
 				{
 					#if USE_FEATURES_VGPR_CACHE
-					const unsigned int featuresCacheOffset = baseFeaturesCacheOffset + subVector;
+					const uint featuresCacheOffset = baseFeaturesCacheOffset + subVector;
 					#else
-					const unsigned int featureOffset = subVector * LocalSize + baseFeatureOffset;
+					const uint featureOffset = subVector * LocalSize + baseFeatureOffset;
 					#endif
 
 					#if CACHE_TMP_DATA
@@ -1126,49 +1138,49 @@ __global__ void template_fitter(
 	// R_EDGE = buffer_count - 2 (= number of features + 3 (noisy color spp buffer) - 2)
 	// R is a (M + 1)x(M + 1) matrix, with M the number of features (here equal to buffer_count - 3)
 	// which gives us R_EDGE = M + 1 = buffer_count - 3 + 1 = buffer_count - 2
-	for(int i = R_EDGE - 2; i >= 0; i--)
+	for(int i = RMatSize - 2; i >= 0; i--)
 	{
-		if(threadId == 0)
+		if(threadIdxInGroup == 0)
 			divider = load_r_mat(r_mat, i, i);
 		
 		SyncThreads();
 		
 		#if COMPRESSED_R
-		if(threadId < R_EDGE && threadId >= i)
+		if(threadIdxInGroup < RMatSize && threadIdxInGroup >= i)
 		#else
 		// First values are always zero if R !COMPRESSED_R and
-		// "&& threadId >= i" makes not compressed code run little bit slower
-		if(threadId < R_EDGE)
+		// "&& threadIdxInGroup >= i" makes not compressed code run little bit slower
+		if(threadIdxInGroup < R_EDGE)
 		#endif
 		{
-			vec3 value = load_r_mat(r_mat, threadId, i);
-			store_r_mat(r_mat, threadId, i, value / vec3(divider.x, divider.y, divider.z));
+			vec3 value = load_r_mat(r_mat, threadIdxInGroup, i);
+			store_r_mat(r_mat, threadIdxInGroup, i, value / vec3(divider.x, divider.y, divider.z));
 		}
 
 		SyncThreads();
 
 		#if 1 // ORIGINAL
-		if(threadId == 0) // Optimization proposal: parallel reduction
+		if(threadIdxInGroup == 0) // Optimization proposal: parallel reduction
 		{
-			for(int j = i + 1; j < R_EDGE - 1; j++)
+			for(int j = i + 1; j < RMatSize - 1; j++)
 			{
-				vec3 value  = load_r_mat(r_mat, R_EDGE - 1, i);
+				vec3 value  = load_r_mat(r_mat, RMatSize - 1, i);
 				vec3 value2 = load_r_mat(r_mat, j, i);
-				store_r_mat(r_mat, R_EDGE - 1, i, value - value2);
+				store_r_mat(r_mat, RMatSize - 1, i, value - value2);
 			}
 		}
 		#else
 		const int startRIdx = (i + 1);
 		const int endRIdx	= (R_EDGE - 1);
 		const int numItems	= endRIdx - startRIdx;
-		if(threadId < numItems)
+		if(threadIdxInGroup < numItems)
 		{
 			// Parallel load
-			const int j = startRIdx + threadId;
+			const int j = startRIdx + threadIdxInGroup;
 			vec3 value2 = load_r_mat(r_mat, j, i);
 
 			// Then iterate over active threads and gather data from lane 0
-			if(threadId == 0)
+			if(threadIdxInGroup == 0)
 			{
 				for(int k = startRIdx; k < endRIdx; k++)
 				{
@@ -1183,24 +1195,23 @@ __global__ void template_fitter(
 		SyncThreads();
 
 		#if COMPRESSED_R
-		if(threadId < R_EDGE && i >= threadId)
+		if(threadIdxInGroup < RMatSize && i >= threadIdxInGroup)
 		#else
-		if(threadId < R_EDGE)
+		if(threadIdxInGroup < RMatSize)
 		#endif
 		{
-			vec3 value  = load_r_mat(r_mat, i, threadId);
-			vec3 value2 = load_r_mat(r_mat, R_EDGE - 1, i);
-			store_r_mat(r_mat, i, threadId, value * value2);
+			vec3 value  = load_r_mat(r_mat, i, threadIdxInGroup);
+			vec3 value2 = load_r_mat(r_mat, RMatSize - 1, i);
+			store_r_mat(r_mat, i, threadIdxInGroup, value * value2);
 		}
 		SyncThreads();
 	}
 
-	// The features are stored in the first (buffers-3) values: the last 3 contain the noisy 1spp color channels
-	if(threadId < BUFFER_COUNT - 3)
+	if(threadIdxInGroup < FeatureCount)
 	{
 		// Store weights
-		const int index = groupId * (BUFFER_COUNT - 3) + threadId;
-		const vec3 weight = load_r_mat(r_mat, R_EDGE - 1, threadId);
+		const int index = groupIdx * FeatureCount + threadIdxInGroup;
+		const vec3 weight = load_r_mat(r_mat, RMatSize - 1, threadIdxInGroup);
 		store3(weights, index, weight);
 	}
 }
@@ -1619,45 +1630,46 @@ __global__ void template_weighted_sum(
 	const float * K_RESTRICT normalized_world_positions	// [in]  Current world positions
 )
 {
-	const ivec2 pixel = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+	const ivec2 gtid = ivec2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
 	
 	const int w = params.sizeX;
 	const int h = params.sizeY;
 
-	if(pixel.x >= w || pixel.y >= h)
+	if(gtid.x >= w || gtid.y >= h)
 		return;
 
 	// Linear pixel index
-	const int linear_pixel = pixel.y * w + pixel.x;
+	const int linearIdx = gtid.y * w + gtid.x;
 
 	// Retrieve linear group index from the offset pixel
-	const ivec2 offset_pixel = ShiftedPixelCoordsToPixelCoords<FitterBlockSize>(pixel, params.frameNumber);
-	const int group_index = (offset_pixel.x / FitterBlockSize) + (offset_pixel.y / FitterBlockSize) * params.worksetWithMarginBlockCountX;
+	const ivec2 pixel = ShiftedPixelCoordsToPixelCoords<FitterBlockSize>(gtid, params.frameNumber);
+	const uint fitterBlockX = pixel.x / FitterBlockSize;
+	const uint fitterBlockY = pixel.y / FitterBlockSize;
+	const uint fitterBlockIdx = fitterBlockY * params.worksetWithMarginBlockCountX + fitterBlockX;
+
+	const uint FeatureCount = BUFFER_COUNT - 3;
 
 	// Reload features from buffer here to have values without stochastic regularization noise
-	// TODO: bind the normalized world_position buffer to avoid renormalizing again (no need for mins_maxs buffer)
-	vec3 normalized_world_position = load3<float>(normalized_world_positions, linear_pixel); 
-	vec3 normal = load3<float>(current_normals, linear_pixel);
+	const vec3 normWorldPos = load3<float>(normalized_world_positions, linearIdx); 
+	const vec3 normal = load3<float>(current_normals, linearIdx);
 
-	float features[BUFFER_COUNT-3];
-	compute_features_without_color(normalized_world_position, normal, features);
-
-	const unsigned baseWeightOffset = group_index * (BUFFER_COUNT - 3);
+	float features[FeatureCount];
+	compute_features_without_color(normWorldPos, normal, features);
 
 	// Weighted sum of the feature buffers
 	vec3 color = vec3(0.f, 0.f, 0.f);
-	for(int feature_buffer = 0; feature_buffer < BUFFER_COUNT - 3; feature_buffer++)
+	const uint weightsBaseOffset = fitterBlockIdx * FeatureCount;
+	for(uint featureIdx = 0; featureIdx < FeatureCount; ++featureIdx)
 	{
-		float feature = features[feature_buffer];
-		vec3 weight = load3<float>(weights, baseWeightOffset + feature_buffer);
-		color += weight * feature;
+		vec3 weight = load3<float>(weights, weightsBaseOffset + featureIdx);
+		color += weight * features[featureIdx];
 	}
 
 	// Remove negative values from every component of the fitting results
-	color = Max(vec3(0.f), color); // TODO -Min(-color, vec3(0.f));
+	color = Max(vec3(0.f), color);
 
 	// Store results
-	store3(output, linear_pixel, color);
+	store3(output, linearIdx, color);
 }
 
 extern "C" void run_new_weighted_sum(

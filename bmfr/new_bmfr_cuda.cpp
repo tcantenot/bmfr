@@ -250,10 +250,10 @@ int new_bmfr_cuda(TmpData & tmpData)
 			buffers.positions_buffer.current().getTypedData<float>(),
 			buffers.normalized_positions_buffer.getTypedData<float>()
 		);
-
-		K_CUDA_CHECK(cudaDeviceSynchronize());
-
 		rescale_features_timers[frame].stop();
+
+		//SaveDevice3Float32ImageToDisk("normalized_wpos", frame, buffers.normalized_positions_buffer, GetPositionsBufferDesc(w, h), "_new_cuda.png");
+
 
 		// Phase I:
 		//  - accumulate noisy 1spp
